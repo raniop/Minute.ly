@@ -8,8 +8,7 @@ linkedin_cookies.json
 # Runtime logs
 logs/
 
-# Demo video files (too large for git, each user provides their own)
-assets/*.mp4
+# Large video files (mov/avi are typically too large for git)
 assets/*.mov
 assets/*.avi
 
