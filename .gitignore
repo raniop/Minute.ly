@@ -8,6 +8,11 @@ linkedin_cookies.json
 # Runtime logs
 logs/
 
+# Demo video files (too large for git, each user provides their own)
+assets/*.mp4
+assets/*.mov
+assets/*.avi
+
 # Python
 __pycache__/
 *.py[cod]

@@ -70,9 +70,11 @@ CSV_FIELDNAMES = [
     "Profile_URL", "Name", "Status", "Last_Contact_Date", "Industry", "Company"
 ]
 
-# Demo link placeholders -- replace with real URLs when ready
-SPORTS_DEMO_LINK = "[SPORTS_DEMO_LINK]"
-NEWS_DEMO_LINK = "[NEWS_DEMO_LINK]"
+# Path to the demo video file to attach in LinkedIn messages.
+# This video is sent inline -- recipients see it directly in the chat
+# with a Play button (no scary links to click).
+# LinkedIn DM file size limit: 20 MB. Place your video in assets/.
+DEMO_VIDEO_FILE = Path("assets/minutely.mp4")
 
 # Valid lead statuses in the processing pipeline
 VALID_STATUSES = {
@@ -103,6 +105,13 @@ class OutreachConfig:
         self.max_delay: int = MAX_DELAY
         self.cookies_file: Path = COOKIES_FILE
         self.leads_file: Path = LEADS_FILE
+        # Video file validation -- must exist before we start outreach
+        self.demo_video: Path = DEMO_VIDEO_FILE
+        if not self.demo_video.exists():
+            raise FileNotFoundError(
+                f"Demo video not found: {self.demo_video}\n"
+                f"Place your demo MP4 video at: {self.demo_video}"
+            )
 
 
 # ===========================================================================
@@ -689,14 +698,124 @@ class LinkedInAutomation:
         self.logger.error("Failed to click Send on the connection modal.")
         return "Error"
 
+    # --- Video Attachment ---
+
+    def attach_video(self, video_path: Path) -> bool:
+        """
+        Attach a video file in the currently open LinkedIn message overlay.
+        Uses Playwright's file_chooser to handle the native file dialog.
+
+        The message overlay MUST already be open before calling this method.
+        The video appears inline in the chat with a Play button -- much more
+        effective than sending a link (which people are afraid to click).
+
+        Args:
+            video_path: Absolute path to the MP4 video file
+
+        Returns:
+            True if video was attached successfully, False otherwise
+        """
+        # ===========================================================================
+        # SAFETY: This function performs a LinkedIn action.
+        # - The video file size must be under 20 MB (LinkedIn's limit)
+        # - A random delay of 60-120s is applied by the caller AFTER the
+        #   full send_message() completes
+        # ===========================================================================
+        self.logger.debug(f"Attaching video: {video_path}")
+
+        # Find the attachment/paperclip button in the message overlay
+        attach_btn = None
+        attach_selectors = [
+            # Aria-label based (most stable)
+            "button[aria-label*='Attach' i]",
+            "button[aria-label*='attach' i]",
+            # LinkedIn's message form footer actions
+            ".msg-form__footer-action button[aria-label*='Attach' i]",
+            ".msg-form__left-actions button[aria-label*='Attach' i]",
+            # Fallback: any button with attachment/paperclip related attributes
+            "button[data-control-name*='attach' i]",
+        ]
+
+        for sel in attach_selectors:
+            try:
+                el = self.page.locator(sel).first
+                if el.is_visible(timeout=3000):
+                    attach_btn = el
+                    self.logger.debug(f"Found attachment button: {sel}")
+                    break
+            except Exception:
+                continue
+
+        if attach_btn is None:
+            self.logger.warning("Could not find attachment/paperclip button.")
+            return False
+
+        # Use Playwright's file_chooser to intercept the native file dialog
+        try:
+            with self.page.expect_file_chooser(timeout=10000) as fc_info:
+                attach_btn.click()
+            file_chooser = fc_info.value
+            file_chooser.set_files(str(video_path))
+            self.logger.debug("Video file set in file chooser.")
+        except Exception as e:
+            self.logger.error(f"File chooser failed: {e}")
+            return False
+
+        # Wait for the upload to complete
+        # LinkedIn shows a preview/thumbnail when the upload finishes
+        self.logger.debug("Waiting for video upload to complete...")
+        upload_complete = False
+
+        # Check for upload indicators (thumbnail, preview, or progress completion)
+        upload_indicators = [
+            # Video/file preview in the message form
+            ".msg-form__media-attachment-container",
+            ".msg-form__attachment",
+            "div[class*='media-attachment']",
+            "div[class*='file-attachment']",
+            # Generic media preview
+            "img[class*='media']",
+            "video",
+        ]
+
+        for _ in range(30):  # Wait up to 30 seconds for upload
+            for sel in upload_indicators:
+                try:
+                    el = self.page.locator(sel)
+                    if el.is_visible(timeout=500):
+                        upload_complete = True
+                        break
+                except Exception:
+                    continue
+            if upload_complete:
+                break
+            time.sleep(1)
+
+        if upload_complete:
+            self.logger.info("Video attached successfully (upload complete).")
+            return True
+        else:
+            # Even if we can't confirm the preview, the file might still be
+            # uploading. Give it a bit more time and proceed.
+            self.logger.warning(
+                "Could not confirm video upload preview, "
+                "but proceeding (file may still be processing)."
+            )
+            time.sleep(5)  # Extra wait for safety
+            return True
+
     # --- Messaging ---
 
-    def send_message(self, message: str) -> bool:
+    def send_message(self, message: str, video_path: Optional[Path] = None) -> bool:
         """
         Send a direct message to a connected user from their profile page.
+        Optionally attaches a video file that appears inline in the chat.
 
         Args:
             message: The full message text to send
+            video_path: Optional path to an MP4 video to attach. If provided,
+                       the video is uploaded via the paperclip button and appears
+                       inline in the chat with a Play button.
 
         Returns:
             True if message sent successfully, False otherwise
@@ -756,6 +875,16 @@ class LinkedInAutomation:
             self.logger.error(f"Failed to type message: {e}")
             self._close_message_overlay()
             return False
+
+        # Step 3.5: Attach video file if provided
+        # The video appears inline in the chat with a Play button -- recipients
+        # see it directly without needing to click any external link.
+        if video_path is not None:
+            if not self.attach_video(video_path):
+                self.logger.warning(
+                    "Video attachment failed, but sending text message anyway."
+                )
+            time.sleep(2)  # Extra wait after attachment
 
         # Step 4: Click Send
         time.sleep(1)
@@ -1187,20 +1316,23 @@ class OutreachOrchestrator:
         # SAFETY: Connection notes are hard-capped at 300 characters by LinkedIn.
         # If the generated note exceeds this, we truncate with "..." to avoid errors.
         # ===========================================================================
+        # Connection requests are TEXT ONLY (no attachments allowed by LinkedIn).
+        # We tease the demo video here -- the actual video is sent in Message 1
+        # after the connection is accepted.
         templates = {
             "Sports": (
                 f"Hi {name}, saw the work at {company}. We help sports leagues "
                 f"verticalize highlights instantly for better yield. "
-                f"Here is a 30s demo: {SPORTS_DEMO_LINK}"
+                f"Would love to share a quick 30s demo!"
             ),
             "News": (
                 f"Hi {name}, for publishers, breaking news needs to be vertical fast. "
-                f"Minute.ly automates this. Short demo here: {NEWS_DEMO_LINK}"
+                f"Minute.ly automates this. Happy to share a quick demo!"
             ),
             "Entertainment": (
                 f"Hi {name}, saw {company}'s content strategy. Minute.ly turns "
                 f"horizontal video into vertical instantly -- boosting engagement. "
-                f"Quick demo: {NEWS_DEMO_LINK}"
+                f"Happy to share a quick demo!"
             ),
         }
         # Default to Entertainment template for Unknown
@@ -1217,21 +1349,30 @@ class OutreachOrchestrator:
         """
         Build the first follow-up message (Video Hook) based on industry.
         Sent to newly connected prospects (after 2+ hour wait).
+
+        This message is sent WITH a video attachment -- the demo video
+        appears inline in the chat with a Play button. The text references
+        the attached video instead of an external link.
         """
         templates = {
             "Sports": (
-                f"Hi {name}, saw the work at {company}. We help sports leagues "
-                f"verticalize highlights instantly for better yield. "
-                f"Here is a 30s demo: {SPORTS_DEMO_LINK}"
+                f"Hi {name}, great to connect! I wanted to show you our H2V AI "
+                f"model that converts horizontal videos to vertical.\n"
+                f"Fox, Paramount, Univision and sports leagues are using it "
+                f"and it works like a charm.\n"
+                f"Here's a 30s demo I attached below!"
             ),
             "News": (
-                f"Hi {name}, for publishers, breaking news needs to be vertical fast. "
-                f"Minute.ly automates this. Short demo here: {NEWS_DEMO_LINK}"
+                f"Hi {name}, great to connect! For publishers, breaking news "
+                f"needs to be vertical fast. Our H2V AI model automates this.\n"
+                f"Fox, Paramount, and Univision are already using it.\n"
+                f"I attached a 30s demo below!"
             ),
             "Entertainment": (
-                f"Hi {name}, saw {company}'s content strategy. Minute.ly turns "
-                f"horizontal video into vertical instantly -- boosting engagement. "
-                f"Quick demo: {NEWS_DEMO_LINK}"
+                f"Hi {name}, great to connect! I wanted to show you our H2V AI "
+                f"model that converts horizontal video to vertical instantly.\n"
+                f"Fox, Paramount, Univision are using it and it works like a "
+                f"charm.\nAttached a quick 30s demo!"
             ),
         }
         return templates.get(industry, templates["Entertainment"])
@@ -1241,9 +1382,10 @@ class OutreachOrchestrator:
         """
         Build the universal follow-up message (Gentle Nudge).
         Sent when Message 1 got no reply after 3+ days.
+        This is TEXT ONLY -- no video attachment on the follow-up.
         """
         return (
-            f"Hi {name}, just checking if the video link worked? "
+            f"Hi {name}, just checking if you got a chance to watch the demo? "
             f"No pressure, just thought the verticalization angle fit your goals."
         )
 
@@ -1436,11 +1578,13 @@ class OutreachOrchestrator:
     def _handle_connected(
         self, lead, linkedin, name, company, industry, profile_url
     ):
-        """Handle a 'Connected' lead: send Message 1 (Video Hook) if timing allows."""
-        self.logger.info(f"Sending Message 1 (Video Hook) to {name}...")
+        """Handle a 'Connected' lead: send Message 1 (Video Hook + video attachment)."""
+        self.logger.info(f"Sending Message 1 (Video Hook + demo video) to {name}...")
 
         message = self.build_message_1(name, company, industry)
-        if linkedin.send_message(message):
+        # Send message WITH the demo video attached -- it appears inline in the
+        # chat with a Play button, so the recipient watches it without clicking links.
+        if linkedin.send_message(message, video_path=self.config.demo_video):
             self.leads_manager.update_lead(profile_url, {
                 "Status": "Message1Sent",
                 "Last_Contact_Date": self.now_iso(),

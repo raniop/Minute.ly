@@ -2,7 +2,7 @@
 
 Automated LinkedIn outreach tool for **Minute.ly**, a video AI company helping broadcasters and media companies monetize vertical video.
 
-The tool reads prospect LinkedIn profiles from a CSV, uses **Google Gemini AI** to classify them by industry (Sports / News / Entertainment), and executes a personalized multi-step outreach sequence.
+The tool reads prospect LinkedIn profiles from a CSV, uses **Google Gemini AI** to classify them by industry (Sports / News / Entertainment), and executes a personalized multi-step outreach sequence -- **including sending a demo video directly in the chat** (no external links needed).
 
 ---
 
@@ -22,12 +22,14 @@ The tool reads prospect LinkedIn profiles from a CSV, uses **Google Gemini AI** 
 ## Outreach Flow
 
 ```
-1. New Lead       --> Send connection request (with personalized industry note)
+1. New Lead       --> Send connection request (personalized text note by industry)
 2. ConnectionSent --> Wait for acceptance (checked on next run)
-3. Connected      --> After 2+ hours, send Message 1 (Video Hook)
-4. Message1Sent   --> After 3+ days with no reply, send Message 2 (Gentle Nudge)
+3. Connected      --> After 2+ hours, send Message 1 (text + demo video attached)
+4. Message1Sent   --> After 3+ days with no reply, send Message 2 (text-only nudge)
 5. Replied        --> Flagged for manual follow-up
 ```
+
+**Key feature:** Message 1 includes the demo video as an inline attachment -- the recipient sees it directly in the chat with a Play button. No external links that people are afraid to click.
 
 Messages are automatically personalized based on Gemini AI classification:
 - **Sports** -- focuses on verticalizing sports highlights for better yield
@@ -41,6 +43,7 @@ Messages are automatically personalized based on Gemini AI classification:
 - **Python 3.10+** (tested with 3.12)
 - **Google Gemini API key** (free at [aistudio.google.com/apikey](https://aistudio.google.com/apikey))
 - **LinkedIn account**
+- **Demo video file** (MP4, under 20 MB)
 
 ---
 
@@ -87,7 +90,19 @@ Open `.env` in any text editor and replace the placeholder:
 GEMINI_API_KEY=your_actual_gemini_api_key_here
 ```
 
-### Step 5: Add your leads
+### Step 5: Add your demo video
+
+Place your demo video (MP4, under 20 MB) in the `assets/` folder:
+
+```
+assets/minutely.mp4
+```
+
+This video will be sent as an inline attachment in LinkedIn messages. The recipient sees it directly in the chat with a Play button -- no external links needed.
+
+> The video file is git-ignored (too large for git). Each user provides their own.
+
+### Step 6: Add your leads
 
 Edit `leads.csv` with your prospect data:
 
@@ -142,7 +157,11 @@ Cookies are loaded automatically -- no login needed (cookies last 1-3 months).
 2026-02-17 13:20:17 | INFO     | Gemini classified John as: Sports
 2026-02-17 13:20:20 | INFO     | Action 1/20: Connection request sent to John (Sports)
 ...
-2026-02-17 14:05:30 | INFO     | Daily safety limit reached. Stopping.
+2026-02-17 14:05:30 | INFO     | Sending Message 1 (Video Hook + demo video) to Jane...
+2026-02-17 14:05:35 | INFO     | Video attached successfully (upload complete).
+2026-02-17 14:05:38 | INFO     | Message sent successfully.
+...
+2026-02-17 14:45:30 | INFO     | Daily safety limit reached. Stopping.
 ```
 
 ---
@@ -157,6 +176,8 @@ Minute.ly/
 ├── .env                 # Your actual API key (git-ignored, never committed)
 ├── leads.csv            # Your prospect data
 ├── .gitignore           # Protects sensitive files from being committed
+├── assets/              # Demo video files (git-ignored, user provides)
+│   └── minutely.mp4     # Your demo video (MP4, under 20 MB)
 ├── cookies/             # Auto-created: saved LinkedIn session (git-ignored)
 │   └── linkedin_cookies.json
 └── logs/                # Auto-created: daily log files (git-ignored)
@@ -167,16 +188,13 @@ Minute.ly/
 
 ## Customizing Message Templates
 
-Demo link placeholders are defined at the top of `main.py`:
+To modify message templates, edit these methods in the `OutreachOrchestrator` class in `main.py`:
 
-```python
-SPORTS_DEMO_LINK = "[SPORTS_DEMO_LINK]"
-NEWS_DEMO_LINK = "[NEWS_DEMO_LINK]"
-```
+- **`build_connection_note()`** -- Text-only note for connection requests (300 char limit, no attachments)
+- **`build_message_1()`** -- First DM after connection (sent WITH the demo video attached)
+- **`build_message_2()`** -- Follow-up nudge after 3 days (text-only, no video)
 
-Replace these with your actual demo URLs before running.
-
-To modify message templates, edit the `build_connection_note()`, `build_message_1()`, and `build_message_2()` methods in the `OutreachOrchestrator` class.
+To change the demo video, simply replace `assets/minutely.mp4` with your new video file (must be MP4, under 20 MB).
 
 ---
 
@@ -199,10 +217,12 @@ MAX_DELAY = 120     # Maximum seconds between actions
 | Issue | Solution |
 |---|---|
 | `GEMINI_API_KEY not found` | Make sure `.env` file exists with your key (copy from `.env.example`) |
+| `Demo video not found` | Place your MP4 video at `assets/minutely.mp4` |
 | `playwright install chromium` fails | Try running as administrator, or check your internet connection |
 | Browser won't open | Make sure you're running from a desktop terminal (not SSH/headless) |
 | `Cookies expired` | The script will prompt for manual login again. This is normal every 1-3 months. |
 | LinkedIn security challenge | Stop the script, resolve the challenge manually in a regular browser, wait 24h, then retry |
+| Video not attaching | Check that the file is under 20 MB and is a valid MP4 |
 | CSV not updating | Check file permissions -- the script needs write access to `leads.csv` |
 
 ---
