@@ -53,8 +53,8 @@ DAILY_LIMIT = 20
 # SAFETY: Minimum and maximum delay (in seconds) between every browser action.
 # These delays simulate human browsing behavior and reduce detection risk.
 # LinkedIn's automated-behavior detection looks for patterns -- randomness helps.
-MIN_DELAY = 60   # 1 minute minimum
-MAX_DELAY = 120  # 2 minutes maximum
+MIN_DELAY = 10   # 10 seconds minimum (increase to 60 for production)
+MAX_DELAY = 20   # 20 seconds maximum (increase to 120 for production)
 
 # LinkedIn connection request notes are capped at 300 characters.
 CONNECTION_NOTE_MAX_CHARS = 300
@@ -170,7 +170,7 @@ class GeminiClassifier:
     Uses Google Gemini API to classify a LinkedIn prospect into one of:
     Sports, News, Entertainment, or Unknown.
 
-    Uses gemini-1.5-flash for speed and cost efficiency -- classification
+    Uses gemini-2.5-flash-lite for speed and cost efficiency -- classification
     is a simple task that doesn't require the Pro model.
     """
 
@@ -203,7 +203,7 @@ Do not include any other text, explanation, or punctuation."""
 
     def __init__(self, api_key: str):
         genai.configure(api_key=api_key)
-        self.model = genai.GenerativeModel("gemini-1.5-flash")
+        self.model = genai.GenerativeModel("gemini-2.5-flash-lite")
         self.logger = logging.getLogger("outreach")
 
     def classify(self, about_text: str, experience_text: str, name: str) -> str:
@@ -314,16 +314,40 @@ class LinkedInAutomation:
 
     def check_login_status(self) -> bool:
         """
-        Verify we are logged into LinkedIn by navigating to the feed
-        and checking we aren't redirected to the login page.
+        Verify we are logged into LinkedIn by waiting for the page to settle
+        and checking the URL. Avoids goto() to prevent navigation conflicts
+        when LinkedIn is already redirecting after login.
         """
         try:
+            # Wait for any in-progress navigation to finish
+            try:
+                self.page.wait_for_load_state("domcontentloaded", timeout=15000)
+            except Exception:
+                pass  # Page might already be loaded
+
+            # Give LinkedIn a moment to finish any redirects
+            time.sleep(5)
+
+            current_url = self.page.url.lower()
+            self.logger.debug(f"Current URL after login: {current_url}")
+
+            # Check if we're on a logged-in LinkedIn page (not login/authwall)
+            if "linkedin.com" in current_url:
+                if "login" not in current_url and "authwall" not in current_url:
+                    self.logger.info("LinkedIn session is active.")
+                    return True
+                else:
+                    self.logger.debug("On login/authwall page -- not logged in.")
+                    return False
+
+            # Not on LinkedIn at all -- try navigating to feed
+            self.logger.debug("Not on LinkedIn, navigating to feed...")
             self.page.goto(
                 "https://www.linkedin.com/feed/",
                 wait_until="domcontentloaded",
                 timeout=30000,
             )
-            time.sleep(3)  # Brief wait for any redirects to complete
+            time.sleep(5)
 
             current_url = self.page.url.lower()
             if "login" in current_url or "authwall" in current_url:
@@ -827,47 +851,186 @@ class LinkedInAutomation:
         # - All outcomes are logged for audit
         # ===========================================================================
 
-        # Step 1: Click Message button
+        # Step 1: Click the CORRECT "Message" button on the profile page.
+        #
+        # PROBLEM: LinkedIn has TWO "Message" elements on connected profiles:
+        #   1) The blue "Message" button in the profile actions area (CORRECT)
+        #   2) A small compose/pencil icon at the bottom-right messaging overlay (WRONG)
+        #
+        # All CSS/Playwright selectors (.first, role-based, etc.) pick up the wrong
+        # one because the compose icon appears earlier in the DOM.
+        #
+        # SOLUTION: Use JavaScript to find the button by its visual text content
+        # and verify it's inside the profile's main content area (not the messaging
+        # overlay). Then click it via Playwright's element handle.
         try:
-            msg_btn = self.page.get_by_role(
-                "button", name=re.compile(r"^Message$", re.I)
-            )
-            if not msg_btn.is_visible(timeout=5000):
-                self.logger.error("Message button not visible. May not be connected.")
-                return False
+            self.page.wait_for_load_state("networkidle", timeout=15000)
+        except Exception:
+            pass
+        time.sleep(3)
+
+        msg_btn = None
+        try:
+            # Use JavaScript to find the correct Message button.
+            # Strategy: Find ALL elements containing "Message" text,
+            # then pick the one that is inside <main> and is a visible
+            # primary/blue action button (not the small compose icon).
+            msg_handle = self.page.evaluate_handle("""
+                () => {
+                    // Strategy 1: Look for buttons/links inside the profile actions
+                    // that contain exactly "Message" as text
+                    const mainEl = document.querySelector('main');
+                    if (!mainEl) return null;
+
+                    // Get all buttons and links inside main
+                    const candidates = mainEl.querySelectorAll('button, a');
+                    for (const el of candidates) {
+                        const text = el.textContent.trim();
+                        // Must contain "Message" (exact or with whitespace)
+                        if (!/^\\s*Message\\s*$/i.test(text)) continue;
+                        // Must be visible
+                        const rect = el.getBoundingClientRect();
+                        if (rect.width === 0 || rect.height === 0) continue;
+                        // Must NOT be inside the messaging overlay at bottom
+                        if (el.closest('.msg-overlay-list-bubble') ||
+                            el.closest('.msg-overlay-bubble-header') ||
+                            el.closest('.msg-overlay-conversation-bubble') ||
+                            el.closest('aside')) continue;
+                        // Good candidate!
+                        return el;
+                    }
+                    return null;
+                }
+            """)
+
+            # Convert JSHandle to ElementHandle for clicking
+            if msg_handle and msg_handle.as_element():
+                msg_btn = msg_handle.as_element()
+                self.logger.debug("Message button found via JavaScript (inside <main>).")
+            else:
+                self.logger.debug("JS method didn't find button, trying Playwright selectors...")
+
+        except Exception as e:
+            self.logger.debug(f"JS button search failed: {e}")
+
+        # Fallback: try Playwright selectors if JS didn't work
+        if msg_btn is None:
+            fallback_selectors = [
+                "main button:has-text('Message')",
+                "main a:has-text('Message')",
+            ]
+            for sel in fallback_selectors:
+                try:
+                    candidate = self.page.locator(sel).first
+                    if candidate.is_visible(timeout=5000):
+                        msg_btn = candidate
+                        self.logger.debug(f"Message button found via fallback: {sel}")
+                        break
+                except Exception:
+                    continue
+
+        if msg_btn is None:
+            self.logger.error("Message button not found. May not be connected.")
+            try:
+                buttons = self.page.locator("button").all_text_contents()
+                self.logger.debug(f"Visible buttons: {buttons[:10]}")
+            except Exception:
+                pass
+            return False
+
+        try:
             msg_btn.click()
-            time.sleep(2)  # Wait for message overlay to open
+            time.sleep(5)  # Wait for the conversation overlay to fully open
+            self.logger.debug("Message button clicked. Waiting for conversation to load...")
+
+            # LinkedIn sometimes briefly shows a typeahead even when opening a
+            # direct conversation from the correct profile Message button.
+            # Do NOT press Escape -- that closes the entire message window!
+            # Instead, wait for it to disappear on its own.
+            try:
+                typeahead = self.page.locator(".msg-connections-typeahead-container")
+                if typeahead.is_visible(timeout=2000):
+                    self.logger.debug("Typeahead visible. Waiting for it to auto-resolve...")
+                    for i in range(10):
+                        time.sleep(1)
+                        try:
+                            if not typeahead.is_visible(timeout=500):
+                                self.logger.debug(f"Typeahead disappeared after {i+1}s.")
+                                break
+                        except Exception:
+                            self.logger.debug(f"Typeahead gone after {i+1}s.")
+                            break
+                    else:
+                        # Still visible -- try clicking message body to dismiss
+                        self.logger.debug("Typeahead persists. Clicking message body...")
+                        try:
+                            body = self.page.locator(
+                                "div[role='textbox'][contenteditable='true']"
+                            ).last
+                            body.click(force=True)
+                            time.sleep(1)
+                        except Exception:
+                            pass
+            except Exception:
+                pass  # Typeahead not present -- good
+
         except Exception as e:
             self.logger.error(f"Failed to click Message button: {e}")
             return False
 
         # Step 2: Find the message input box
-        # LinkedIn uses a contenteditable div, NOT a textarea
+        # LinkedIn uses a contenteditable div, NOT a textarea.
+        # On the full messaging page (not overlay), the selectors may differ.
         message_box = None
         msg_box_selectors = [
-            "div[role='textbox'][contenteditable='true']",
+            # Full messaging page selectors
+            "div[role='textbox'][contenteditable='true'][aria-label*='Write a message' i]",
+            "div[role='textbox'][contenteditable='true'][aria-label*='message' i]",
             "div.msg-form__contenteditable[contenteditable='true']",
-            "div[contenteditable='true'][aria-label*='message' i]",
+            # Broader fallbacks for the full page
+            "div.msg-form__msg-content-container div[contenteditable='true']",
+            "form.msg-form div[contenteditable='true']",
+            # Generic contenteditable in the messaging area
+            "div[role='textbox'][contenteditable='true']",
+            # Paragraph inside contenteditable (LinkedIn sometimes nests <p> inside)
+            "div.msg-form__contenteditable p",
         ]
 
         for sel in msg_box_selectors:
             try:
                 el = self.page.locator(sel).last  # .last because there may be multiple
-                if el.is_visible(timeout=5000):
+                if el.is_visible(timeout=8000):
                     message_box = el
+                    self.logger.debug(f"Message box found via: {sel}")
                     break
             except Exception:
                 continue
 
         if message_box is None:
             self.logger.error("Could not find message input box.")
+            # Debug: log what's on the page to help diagnose
+            try:
+                page_title = self.page.title()
+                self.logger.debug(f"Page title: {page_title}")
+                # Check if there are any contenteditable elements at all
+                ce_count = self.page.locator("[contenteditable='true']").count()
+                self.logger.debug(f"Contenteditable elements on page: {ce_count}")
+                # Check for forms
+                form_count = self.page.locator("form").count()
+                self.logger.debug(f"Form elements on page: {form_count}")
+                # Check for textbox roles
+                tb_count = self.page.locator("[role='textbox']").count()
+                self.logger.debug(f"Textbox role elements on page: {tb_count}")
+            except Exception:
+                pass
             self._close_message_overlay()
             return False
 
         # Step 3: Type the message
-        # Using fill() for reliability. LinkedIn's contenteditable div works with fill().
+        # Use force=True to bypass any remaining overlay intercepting pointer events,
+        # then fill() the contenteditable div.
         try:
-            message_box.click()
+            message_box.click(force=True)
             time.sleep(0.5)
             message_box.fill(message)
             self.logger.debug(f"Typed message ({len(message)} chars).")
@@ -887,16 +1050,52 @@ class LinkedInAutomation:
             time.sleep(2)  # Extra wait after attachment
 
         # Step 4: Click Send
+        # The Send area has 2 buttons: the actual "Send" button and a small
+        # "Send options" toggle (arrow). We must target the submit button only.
         time.sleep(1)
         try:
-            send_btn = self.page.locator(
-                "div.msg-form__right-actions button:has-text('Send')"
-            )
-            if not send_btn.is_visible(timeout=3000):
+            send_btn = None
+            send_selectors = [
+                # Most specific: the submit button inside the send form
+                "button.msg-form__send-button[type='submit']",
+                # Submit button with Send text
+                "button[type='submit']:has-text('Send')",
+                # Aria-label based
+                "button[aria-label='Send' i]",
+            ]
+            for sel in send_selectors:
+                try:
+                    candidate = self.page.locator(sel).first
+                    if candidate.is_visible(timeout=3000):
+                        send_btn = candidate
+                        self.logger.debug(f"Send button found via: {sel}")
+                        break
+                except Exception:
+                    continue
+
+            if send_btn is None:
+                # Last resort: role-based but use .first to avoid strict mode
                 send_btn = self.page.get_by_role(
                     "button", name=re.compile(r"^Send$", re.I)
-                ).last
-            send_btn.click()
+                ).first
+
+            # LinkedIn may keep Send disabled until content is processed.
+            # Wait up to 10 seconds for it to become enabled.
+            is_disabled = send_btn.is_disabled()
+            if is_disabled:
+                self.logger.debug("Send button is disabled. Waiting for it to enable...")
+                for _ in range(20):  # 20 * 0.5s = 10 seconds
+                    time.sleep(0.5)
+                    if not send_btn.is_disabled():
+                        self.logger.debug("Send button is now enabled.")
+                        break
+                else:
+                    self.logger.warning(
+                        "Send button still disabled after 10s. "
+                        "Clicking with force=True..."
+                    )
+
+            send_btn.click(force=True)
             time.sleep(2)
             self.logger.info("Message sent successfully.")
             self._close_message_overlay()
@@ -916,14 +1115,29 @@ class LinkedInAutomation:
         Returns True if a reply was detected, False otherwise.
         """
         try:
-            # Open the message thread
-            msg_btn = self.page.get_by_role(
-                "button", name=re.compile(r"^Message$", re.I)
-            )
-            if not msg_btn.is_visible(timeout=5000):
+            # Open the message thread by clicking the Message button via JS
+            msg_handle = self.page.evaluate_handle("""
+                () => {
+                    const mainEl = document.querySelector('main');
+                    if (!mainEl) return null;
+                    const candidates = mainEl.querySelectorAll('button, a');
+                    for (const el of candidates) {
+                        const text = el.textContent.trim();
+                        if (!/^\\s*Message\\s*$/i.test(text)) continue;
+                        const rect = el.getBoundingClientRect();
+                        if (rect.width === 0 || rect.height === 0) continue;
+                        if (el.closest('.msg-overlay-list-bubble') ||
+                            el.closest('.msg-overlay-bubble-header') ||
+                            el.closest('aside')) continue;
+                        return el;
+                    }
+                    return null;
+                }
+            """)
+            if not msg_handle or not msg_handle.as_element():
                 return False
-            msg_btn.click()
-            time.sleep(3)  # Wait for conversation to load
+            msg_handle.as_element().click()
+            time.sleep(5)  # Wait for conversation to load
 
             # Look for message items in the conversation
             messages = self.page.locator("li.msg-s-message-list__event")
@@ -1295,14 +1509,86 @@ class OutreachOrchestrator:
 
         input("  >>> Press ENTER after you have logged in... ")
 
-        # Verify login succeeded
-        if linkedin.check_login_status():
-            CookieManager.save_cookies(context, self.config.cookies_file)
-            self.logger.info("Manual login successful. Cookies saved for future runs.")
-            return True
+        # Verify login by checking page content, NOT the URL.
+        # LinkedIn uses client-side routing so page.url often still shows
+        # "/login" even after a successful login + redirect to /feed/.
+        print("  Verifying login...")
+        self.logger.info("Verifying login status...")
+        time.sleep(3)  # Let the page settle
 
-        self.logger.error("Login verification failed. Please try again.")
-        return False
+        # Log what Playwright sees vs what might actually be on screen
+        try:
+            pw_url = page.url
+            pw_title = page.title()
+            self.logger.info(f"  Playwright URL: {pw_url}")
+            self.logger.info(f"  Playwright title: {pw_title}")
+        except Exception as e:
+            self.logger.debug(f"  Could not read page info: {e}")
+
+        # Strategy: Try multiple ways to confirm login
+        logged_in_page = None
+
+        # Check all tabs in the context
+        for p in context.pages:
+            try:
+                url = p.url.lower()
+                title = p.title().lower()
+                self.logger.debug(f"  Tab URL: {url} | Title: {title}")
+
+                # Way 1: URL-based (no "login" or "authwall")
+                if "linkedin.com" in url and "login" not in url and "authwall" not in url:
+                    logged_in_page = p
+                    self.logger.info(f"  Login confirmed by URL: {url}")
+                    break
+
+                # Way 2: Title-based -- LinkedIn feed shows "Feed | LinkedIn" or "(X) Feed | LinkedIn"
+                if "linkedin" in title and ("feed" in title or "messaging" in title or "network" in title):
+                    logged_in_page = p
+                    self.logger.info(f"  Login confirmed by page title: {title}")
+                    break
+
+                # Way 3: DOM-based -- look for elements only visible when logged in
+                if "linkedin.com" in url:
+                    try:
+                        is_logged_in = p.evaluate("""() => {
+                            // Check for any of these logged-in indicators
+                            const selectors = [
+                                '.global-nav',
+                                '.feed-shared-update-v2',
+                                '.scaffold-layout',
+                                '[data-test-global-nav]',
+                                '.authentication-outlet',
+                                '.search-global-typeahead',
+                                'nav.global-nav',
+                                '#global-nav',
+                                '.ember-application .scaffold-layout'
+                            ];
+                            for (const sel of selectors) {
+                                if (document.querySelector(sel)) return true;
+                            }
+                            return false;
+                        }""")
+                        if is_logged_in:
+                            logged_in_page = p
+                            self.logger.info(f"  Login confirmed by DOM elements (URL still shows: {url})")
+                            break
+                    except Exception as dom_err:
+                        self.logger.debug(f"  DOM check error: {dom_err}")
+
+            except Exception as e:
+                self.logger.debug(f"  Error checking tab: {e}")
+
+        if not logged_in_page:
+            self.logger.error("Could not verify login on any tab.")
+            print("\n  [!] Login verification failed.")
+            print("  Make sure you logged in inside the Playwright Chromium window")
+            print("  (the browser that opened automatically -- NOT your regular Chrome).")
+            return False
+
+        # Save cookies and return the logged-in page
+        CookieManager.save_cookies(context, self.config.cookies_file)
+        self.logger.info("Manual login successful. Cookies saved for future runs.")
+        return True, logged_in_page
 
     # --- Message Templates ---
 
@@ -1658,14 +1944,21 @@ class OutreachOrchestrator:
 
         # Launch browser
         pw, browser, context, page = self.launch_browser()
-        linkedin = LinkedInAutomation(page)
 
         try:
-            # Login
-            if not self.handle_login(context, page):
+            # Login -- handle_login may return (True, new_page) if login
+            # happened in a different tab than the original
+            login_result = self.handle_login(context, page)
+            if login_result is False:
                 self.logger.error("Failed to log in. Aborting.")
                 print("\nLogin failed. Please check your LinkedIn credentials.")
                 return
+
+            # Unpack -- login_result is either True or (True, new_page)
+            if isinstance(login_result, tuple):
+                page = login_result[1]  # Use the logged-in page
+
+            linkedin = LinkedInAutomation(page)
 
             # Process each lead
             for i, lead in enumerate(actionable):
