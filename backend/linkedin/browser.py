@@ -9,7 +9,6 @@ import time
 from playwright.sync_api import sync_playwright, Page, BrowserContext
 
 from backend.linkedin.cookies import CookieManager
-from backend.linkedin.automation import LinkedInAutomation
 from backend.config import settings
 
 logger = logging.getLogger("minutely")
@@ -67,6 +66,7 @@ def handle_login(context: BrowserContext, page: Page) -> bool:
 
     Returns True if logged in, False if login failed.
     """
+    from backend.linkedin.automation import LinkedInAutomation
     linkedin = LinkedInAutomation(page)
 
     # Attempt 1: Load saved cookies
