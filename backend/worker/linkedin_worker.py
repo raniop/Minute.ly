@@ -17,14 +17,9 @@ from backend.database import SessionLocal
 from backend.models.contact import Contact
 from backend.models.message import Message
 
-# Playwright imports are optional (not available on Railway server)
-try:
-    from backend.linkedin.automation import LinkedInAutomation
-    from backend.linkedin.browser import launch_browser, handle_login
-    from backend.linkedin.cookies import CookieManager
-    PLAYWRIGHT_AVAILABLE = True
-except Exception:
-    PLAYWRIGHT_AVAILABLE = False
+from backend.linkedin.automation import LinkedInAutomation
+from backend.linkedin.browser import launch_browser, handle_login
+from backend.linkedin.cookies import CookieManager
 
 logger = logging.getLogger("minutely")
 
@@ -65,9 +60,6 @@ class LinkedInWorker:
 
     async def start(self):
         """Start the worker's processing loop."""
-        if not PLAYWRIGHT_AVAILABLE:
-            logger.warning("Playwright not available. LinkedIn worker disabled.")
-            return
         self._running = True
         self._loop_task = asyncio.create_task(self._run_loop())
         logger.info("LinkedIn worker started.")
@@ -77,8 +69,7 @@ class LinkedInWorker:
         self._running = False
         if self._loop_task:
             self._loop_task.cancel()
-        if PLAYWRIGHT_AVAILABLE:
-            await asyncio.to_thread(self._close_browser)
+        await asyncio.to_thread(self._close_browser)
         logger.info("LinkedIn worker stopped.")
 
     async def enqueue(self, task: WorkerTask) -> str:
