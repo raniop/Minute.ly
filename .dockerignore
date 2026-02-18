@@ -1,0 +1,15 @@
+node_modules
+frontend/node_modules
+frontend/dist
+.git
+.env
+__pycache__
+*.pyc
+.claude
+minutely.db
+logs/
+nul
+*.mov
+*.avi
+.venv
+venv

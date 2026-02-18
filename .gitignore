@@ -32,9 +32,16 @@ env/
 *.swp
 *.swo
 
+# Database
+minutely.db
+
+# Node
+node_modules/
+
 # OS
 Thumbs.db
 .DS_Store
+nul
 
 # Claude Code
 .claude/

@@ -802,7 +802,7 @@ class LinkedInAutomation:
             "video",
         ]
 
-        for _ in range(30):  # Wait up to 30 seconds for upload
+        for _ in range(8):  # Wait up to 8 seconds for upload
             for sel in upload_indicators:
                 try:
                     el = self.page.locator(sel)
@@ -825,7 +825,7 @@ class LinkedInAutomation:
                 "Could not confirm video upload preview, "
                 "but proceeding (file may still be processing)."
             )
-            time.sleep(5)  # Extra wait for safety
+            time.sleep(2)  # Extra wait for safety
             return True
 
     # --- Messaging ---
@@ -864,10 +864,10 @@ class LinkedInAutomation:
         # and verify it's inside the profile's main content area (not the messaging
         # overlay). Then click it via Playwright's element handle.
         try:
-            self.page.wait_for_load_state("networkidle", timeout=15000)
+            self.page.wait_for_load_state("networkidle", timeout=5000)
         except Exception:
             pass
-        time.sleep(3)
+        time.sleep(1)
 
         msg_btn = None
         try:
@@ -922,7 +922,7 @@ class LinkedInAutomation:
             for sel in fallback_selectors:
                 try:
                     candidate = self.page.locator(sel).first
-                    if candidate.is_visible(timeout=5000):
+                    if candidate.is_visible(timeout=2000):
                         msg_btn = candidate
                         self.logger.debug(f"Message button found via fallback: {sel}")
                         break
@@ -940,7 +940,7 @@ class LinkedInAutomation:
 
         try:
             msg_btn.click()
-            time.sleep(5)  # Wait for the conversation overlay to fully open
+            time.sleep(2)  # Wait for the conversation overlay to fully open
             self.logger.debug("Message button clicked. Waiting for conversation to load...")
 
             # LinkedIn sometimes briefly shows a typeahead even when opening a
@@ -949,12 +949,12 @@ class LinkedInAutomation:
             # Instead, wait for it to disappear on its own.
             try:
                 typeahead = self.page.locator(".msg-connections-typeahead-container")
-                if typeahead.is_visible(timeout=2000):
+                if typeahead.is_visible(timeout=1000):
                     self.logger.debug("Typeahead visible. Waiting for it to auto-resolve...")
-                    for i in range(10):
-                        time.sleep(1)
+                    for i in range(5):
+                        time.sleep(0.5)
                         try:
-                            if not typeahead.is_visible(timeout=500):
+                            if not typeahead.is_visible(timeout=300):
                                 self.logger.debug(f"Typeahead disappeared after {i+1}s.")
                                 break
                         except Exception:
@@ -968,7 +968,7 @@ class LinkedInAutomation:
                                 "div[role='textbox'][contenteditable='true']"
                             ).last
                             body.click(force=True)
-                            time.sleep(1)
+                            time.sleep(0.5)
                         except Exception:
                             pass
             except Exception:
@@ -999,7 +999,7 @@ class LinkedInAutomation:
         for sel in msg_box_selectors:
             try:
                 el = self.page.locator(sel).last  # .last because there may be multiple
-                if el.is_visible(timeout=8000):
+                if el.is_visible(timeout=3000):
                     message_box = el
                     self.logger.debug(f"Message box found via: {sel}")
                     break
@@ -1047,12 +1047,12 @@ class LinkedInAutomation:
                 self.logger.warning(
                     "Video attachment failed, but sending text message anyway."
                 )
-            time.sleep(2)  # Extra wait after attachment
+            time.sleep(1)  # Extra wait after attachment
 
         # Step 4: Click Send
         # The Send area has 2 buttons: the actual "Send" button and a small
         # "Send options" toggle (arrow). We must target the submit button only.
-        time.sleep(1)
+        time.sleep(0.5)
         try:
             send_btn = None
             send_selectors = [
@@ -1066,7 +1066,7 @@ class LinkedInAutomation:
             for sel in send_selectors:
                 try:
                     candidate = self.page.locator(sel).first
-                    if candidate.is_visible(timeout=3000):
+                    if candidate.is_visible(timeout=2000):
                         send_btn = candidate
                         self.logger.debug(f"Send button found via: {sel}")
                         break
@@ -1084,19 +1084,19 @@ class LinkedInAutomation:
             is_disabled = send_btn.is_disabled()
             if is_disabled:
                 self.logger.debug("Send button is disabled. Waiting for it to enable...")
-                for _ in range(20):  # 20 * 0.5s = 10 seconds
+                for _ in range(10):  # 10 * 0.5s = 5 seconds
                     time.sleep(0.5)
                     if not send_btn.is_disabled():
                         self.logger.debug("Send button is now enabled.")
                         break
                 else:
                     self.logger.warning(
-                        "Send button still disabled after 10s. "
+                        "Send button still disabled after 5s. "
                         "Clicking with force=True..."
                     )
 
             send_btn.click(force=True)
-            time.sleep(2)
+            time.sleep(1)
             self.logger.info("Message sent successfully.")
             self._close_message_overlay()
             return True
