@@ -72,3 +72,8 @@ export interface ContactStats {
   messaged: number
   replied: number
 }
+
+export interface LoginResponse {
+  status: string
+  message: string
+}

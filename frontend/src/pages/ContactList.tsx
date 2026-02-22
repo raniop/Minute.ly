@@ -1,9 +1,15 @@
-import { useQuery } from '@tanstack/react-query'
-import { getContacts, getContactStats, scrapeConnections } from '../api/client'
-import { useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { getContacts, getContactStats, scrapeConnections, getJobStatus } from '../api/client'
+import { useState, useEffect, useCallback } from 'react'
+import LinkedInStatus from '../components/LinkedInStatus'
 
 export default function ContactList() {
   const [industry, setIndustry] = useState('')
+  const [browserConnected, setBrowserConnected] = useState(false)
+  const [scraping, setScraping] = useState(false)
+  const [scrapeJobId, setScrapeJobId] = useState<string | null>(null)
+  const [scrapeProgress, setScrapeProgress] = useState({ progress: 0, total: 0, status: '' })
+  const queryClient = useQueryClient()
 
   const { data: contacts, isLoading } = useQuery({
     queryKey: ['contacts', industry],
@@ -20,28 +26,68 @@ export default function ContactList() {
     queryFn: getContactStats,
   })
 
-  const [scraping, setScraping] = useState(false)
+  const handleStatusChange = useCallback((connected: boolean) => {
+    setBrowserConnected(connected)
+  }, [])
+
   const handleScrape = async () => {
     setScraping(true)
+    setScrapeProgress({ progress: 0, total: 0, status: 'queued' })
     try {
-      await scrapeConnections()
+      const result = await scrapeConnections()
+      setScrapeJobId(result.job_id)
     } catch {
-      // handle error
+      setScraping(false)
+      setScrapeProgress({ progress: 0, total: 0, status: '' })
     }
-    setScraping(false)
   }
+
+  // Poll scrape job status
+  useEffect(() => {
+    if (!scrapeJobId) return
+    const interval = setInterval(async () => {
+      try {
+        const status = await getJobStatus(scrapeJobId)
+        setScrapeProgress({
+          progress: status.progress,
+          total: status.total,
+          status: status.status,
+        })
+        if (status.status === 'completed' || status.status === 'failed') {
+          clearInterval(interval)
+          setScrapeJobId(null)
+          setScraping(false)
+          queryClient.invalidateQueries({ queryKey: ['contacts'] })
+          queryClient.invalidateQueries({ queryKey: ['contactStats'] })
+        }
+      } catch {
+        // ignore
+      }
+    }, 2000)
+    return () => clearInterval(interval)
+  }, [scrapeJobId, queryClient])
 
   return (
     <div className="max-w-6xl mx-auto p-6">
+      <LinkedInStatus onStatusChange={handleStatusChange} />
+
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-gray-900">All Contacts</h1>
-        <button
-          onClick={handleScrape}
-          disabled={scraping}
-          className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50"
-        >
-          {scraping ? 'Scraping...' : 'Scrape LinkedIn Connections'}
-        </button>
+        <div className="flex items-center gap-3">
+          {scraping && scrapeProgress.total > 0 && (
+            <span className="text-sm text-gray-500">
+              {scrapeProgress.progress}/{scrapeProgress.total} scraped
+            </span>
+          )}
+          <button
+            onClick={handleScrape}
+            disabled={scraping || !browserConnected}
+            className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            title={!browserConnected ? 'Login to LinkedIn first' : ''}
+          >
+            {scraping ? 'Scraping...' : 'Scrape LinkedIn Connections'}
+          </button>
+        </div>
       </div>
 
       {stats && (
@@ -139,7 +185,7 @@ export default function ContactList() {
               {(!contacts || contacts.length === 0) && (
                 <tr>
                   <td colSpan={6} className="px-4 py-8 text-center text-gray-500">
-                    No contacts found. Scrape your LinkedIn connections to get started.
+                    No contacts found. {browserConnected ? 'Click "Scrape LinkedIn Connections" to get started.' : 'Login to LinkedIn first, then scrape your connections.'}
                   </td>
                 </tr>
               )}

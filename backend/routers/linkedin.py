@@ -1,9 +1,19 @@
 from fastapi import APIRouter
+from pydantic import BaseModel
 from backend.schemas.batch import JobStatusOut
 from backend.worker.linkedin_worker import worker
 from backend.worker.task_queue import WorkerTask, TaskType, task_registry
 
 router = APIRouter()
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class VerifyRequest(BaseModel):
+    code: str
 
 
 @router.get("/status")
@@ -17,10 +27,17 @@ def get_worker_status():
 
 
 @router.post("/login")
-async def start_login():
-    """Start manual login flow (opens Playwright browser)."""
-    task = await worker.launch_and_login()
-    return task.to_dict()
+async def credential_login(req: LoginRequest):
+    """Login to LinkedIn with email and password."""
+    result = await worker.credential_login(req.email, req.password)
+    return result
+
+
+@router.post("/verify")
+async def submit_verification(req: VerifyRequest):
+    """Submit a verification code for LinkedIn 2FA."""
+    result = await worker.submit_verification(req.code)
+    return result
 
 
 @router.post("/check-login")

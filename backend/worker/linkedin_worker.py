@@ -162,6 +162,157 @@ class LinkedInWorker:
         # User logs in manually in the Playwright window.
         # We'll check login status when the next task comes in.
 
+    async def credential_login(self, email: str, password: str) -> dict:
+        """Login to LinkedIn with email/password via Playwright. Returns status dict."""
+        try:
+            result = await asyncio.to_thread(self._do_credential_login, email, password)
+            return result
+        except Exception as e:
+            logger.error(f"Credential login failed: {e}")
+            return {"status": "failed", "message": str(e)}
+
+    def _do_credential_login(self, email: str, password: str) -> dict:
+        """Fill in LinkedIn login form with credentials (runs in thread)."""
+        self._close_browser()
+        self._pw, self._browser, self._context, self._page = launch_browser()
+
+        # First try saved cookies
+        if CookieManager.cookies_exist(settings.cookies_file):
+            logger.info("Trying saved cookies first...")
+            if CookieManager.load_cookies(self._context, settings.cookies_file):
+                linkedin = LinkedInAutomation(self._page)
+                if linkedin.check_login_status():
+                    self._linkedin = linkedin
+                    self._browser_ready = True
+                    logger.info("Login via saved cookies successful.")
+                    return {"status": "connected", "message": "Logged in via saved cookies"}
+
+        # Navigate to login page
+        logger.info("Navigating to LinkedIn login page...")
+        self._page.goto("https://www.linkedin.com/login", wait_until="domcontentloaded")
+        time.sleep(2)
+
+        # Fill credentials
+        try:
+            self._page.fill("#username", email)
+            time.sleep(0.5)
+            self._page.fill("#password", password)
+            time.sleep(0.5)
+            self._page.click("button[type='submit']")
+            logger.info("Credentials submitted, waiting for response...")
+        except Exception as e:
+            logger.error(f"Failed to fill login form: {e}")
+            return {"status": "failed", "message": f"Could not fill login form: {e}"}
+
+        # Wait for page to load after login
+        time.sleep(8)
+
+        current_url = self._page.url.lower()
+        logger.info(f"Post-login URL: {current_url}")
+
+        # Check for security verification / checkpoint
+        if any(term in current_url for term in ["checkpoint", "challenge", "security"]):
+            logger.warning("Security verification required.")
+            return {"status": "verification_needed", "message": "LinkedIn requires verification. Enter the code sent to your email/phone."}
+
+        # Check for wrong credentials
+        try:
+            error_el = self._page.locator("#error-for-password, #error-for-username, .form__label--error")
+            if error_el.is_visible(timeout=2000):
+                error_text = error_el.inner_text().strip()
+                logger.error(f"Login error: {error_text}")
+                return {"status": "failed", "message": error_text or "Invalid credentials"}
+        except Exception:
+            pass
+
+        # Check if login was successful
+        if "feed" in current_url or ("linkedin.com" in current_url and "login" not in current_url and "authwall" not in current_url):
+            self._linkedin = LinkedInAutomation(self._page)
+            self._browser_ready = True
+            CookieManager.save_cookies(self._context, settings.cookies_file)
+            logger.info("Credential login successful. Cookies saved.")
+            return {"status": "connected", "message": "Successfully logged in to LinkedIn"}
+
+        # Unknown state
+        logger.warning(f"Unexpected post-login state. URL: {current_url}")
+        return {"status": "failed", "message": "Login result unclear. Please try again."}
+
+    async def submit_verification(self, code: str) -> dict:
+        """Submit a verification code on the checkpoint page."""
+        try:
+            result = await asyncio.to_thread(self._do_submit_verification, code)
+            return result
+        except Exception as e:
+            logger.error(f"Verification failed: {e}")
+            return {"status": "failed", "message": str(e)}
+
+    def _do_submit_verification(self, code: str) -> dict:
+        """Fill in verification code on checkpoint page (runs in thread)."""
+        if not self._page:
+            return {"status": "failed", "message": "No browser session. Login first."}
+
+        try:
+            # Try common verification input selectors
+            input_selectors = [
+                "input#input__email_verification_pin",
+                "input#input__phone_verification_pin",
+                "input[name='pin']",
+                "input[type='text']",
+            ]
+            filled = False
+            for sel in input_selectors:
+                try:
+                    el = self._page.locator(sel)
+                    if el.is_visible(timeout=2000):
+                        el.fill(code)
+                        filled = True
+                        logger.info(f"Verification code entered via: {sel}")
+                        break
+                except Exception:
+                    continue
+
+            if not filled:
+                return {"status": "failed", "message": "Could not find verification input field"}
+
+            # Click submit
+            time.sleep(0.5)
+            submit_selectors = [
+                "button#two-step-submit-button",
+                "button[type='submit']",
+                "button:has-text('Submit')",
+                "button:has-text('Verify')",
+            ]
+            for sel in submit_selectors:
+                try:
+                    btn = self._page.locator(sel)
+                    if btn.is_visible(timeout=2000):
+                        btn.click()
+                        logger.info(f"Verification submitted via: {sel}")
+                        break
+                except Exception:
+                    continue
+
+            time.sleep(8)
+
+            current_url = self._page.url.lower()
+            logger.info(f"Post-verification URL: {current_url}")
+
+            if "feed" in current_url or ("linkedin.com" in current_url and "login" not in current_url and "checkpoint" not in current_url):
+                self._linkedin = LinkedInAutomation(self._page)
+                self._browser_ready = True
+                CookieManager.save_cookies(self._context, settings.cookies_file)
+                logger.info("Verification successful. Cookies saved.")
+                return {"status": "connected", "message": "Verification successful"}
+
+            if "checkpoint" in current_url or "challenge" in current_url:
+                return {"status": "verification_needed", "message": "Verification code was incorrect. Try again."}
+
+            return {"status": "failed", "message": "Verification result unclear."}
+
+        except Exception as e:
+            logger.error(f"Verification error: {e}")
+            return {"status": "failed", "message": str(e)}
+
     def check_and_finalize_login(self) -> bool:
         """Check if user has logged in. Call this after manual login."""
         if not self._page:

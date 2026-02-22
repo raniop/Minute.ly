@@ -8,6 +8,7 @@ import type {
   WorkerStatus,
   ContactStats,
   Contact,
+  LoginResponse,
 } from '../types'
 
 const api = axios.create({
@@ -38,8 +39,11 @@ export const getContactStats = () =>
 export const getWorkerStatus = () =>
   api.get<WorkerStatus>('/linkedin/status').then(r => r.data)
 
-export const startLogin = () =>
-  api.post<JobStatus>('/linkedin/login').then(r => r.data)
+export const loginLinkedIn = (email: string, password: string) =>
+  api.post<LoginResponse>('/linkedin/login', { email, password }).then(r => r.data)
+
+export const verifyLinkedIn = (code: string) =>
+  api.post<LoginResponse>('/linkedin/verify', { code }).then(r => r.data)
 
 export const checkLogin = () =>
   api.post<{ logged_in: boolean }>('/linkedin/check-login').then(r => r.data)
