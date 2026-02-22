@@ -45,6 +45,7 @@ class LinkedInWorker:
         self._linkedin: Optional[LinkedInAutomation] = None
         self._browser_ready = False
         self._loop_task = None
+        self._checking_login = False  # guard against concurrent check_and_finalize_login
 
     @property
     def is_browser_ready(self) -> bool:
@@ -314,19 +315,28 @@ class LinkedInWorker:
             return {"status": "failed", "message": str(e)}
 
     def check_and_finalize_login(self) -> bool:
-        """Check if user has logged in (e.g. after app-based approval)."""
+        """Check if user has logged in (e.g. after app-based approval).
+
+        After app-based approval, the checkpoint page doesn't auto-redirect.
+        We navigate directly to the feed to check if the session is now valid.
+        """
         if not self._page:
             return False
 
-        try:
-            # Reload the current page to detect redirect after app approval
-            self._page.reload(wait_until="domcontentloaded")
-            time.sleep(3)
-        except Exception as e:
-            logger.debug(f"Page reload failed: {e}")
+        # Prevent concurrent calls (auto-poll + manual button click)
+        if self._checking_login:
+            logger.debug("check_and_finalize_login: already in progress, skipping")
+            return False
+        self._checking_login = True
 
-        # Check the main page URL first
         try:
+            # Navigate directly to the feed — after app approval the session
+            # cookies are valid, but the checkpoint page won't redirect on its own.
+            logger.info("check_and_finalize_login: navigating to /feed to check session...")
+            self._page.goto("https://www.linkedin.com/feed", wait_until="domcontentloaded")
+            time.sleep(4)
+
+            # Check the main page URL
             url = self._page.url.lower()
             logger.info(f"check_and_finalize_login: current URL = {url}")
             if ("linkedin.com" in url
@@ -339,28 +349,20 @@ class LinkedInWorker:
                 CookieManager.save_cookies(self._context, settings.cookies_file)
                 logger.info("Login confirmed and cookies saved.")
                 return True
-        except Exception:
-            pass
 
-        # Check all tabs as fallback
-        for p in self._context.pages:
+            # If feed redirected back to checkpoint, go back
             try:
-                url = p.url.lower()
-                if ("linkedin.com" in url
-                        and "login" not in url
-                        and "authwall" not in url
-                        and "checkpoint" not in url
-                        and "challenge" not in url):
-                    self._page = p
-                    self._linkedin = LinkedInAutomation(p)
-                    self._browser_ready = True
-                    CookieManager.save_cookies(self._context, settings.cookies_file)
-                    logger.info("Login confirmed via tab and cookies saved.")
-                    return True
+                self._page.go_back(wait_until="domcontentloaded")
+                time.sleep(1)
             except Exception:
-                continue
+                pass
 
-        return False
+            return False
+        except Exception as e:
+            logger.debug(f"check_and_finalize_login error: {e}")
+            return False
+        finally:
+            self._checking_login = False
 
     def _send_messages(self, task: WorkerTask):
         """Send initial messages to contacts."""

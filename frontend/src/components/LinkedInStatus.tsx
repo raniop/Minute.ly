@@ -56,7 +56,7 @@ export default function LinkedInStatus({ onStatusChange }: Props) {
       } catch {
         // ignore
       }
-    }, 4000)
+    }, 8000)
 
     return () => {
       if (verifyPollRef.current) {
