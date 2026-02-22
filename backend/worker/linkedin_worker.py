@@ -314,24 +314,48 @@ class LinkedInWorker:
             return {"status": "failed", "message": str(e)}
 
     def check_and_finalize_login(self) -> bool:
-        """Check if user has logged in. Call this after manual login."""
+        """Check if user has logged in (e.g. after app-based approval)."""
         if not self._page:
             return False
 
-        linkedin = LinkedInAutomation(self._page)
+        try:
+            # Reload the current page to detect redirect after app approval
+            self._page.reload(wait_until="domcontentloaded")
+            time.sleep(3)
+        except Exception as e:
+            logger.debug(f"Page reload failed: {e}")
 
-        # Check all tabs
+        # Check the main page URL first
+        try:
+            url = self._page.url.lower()
+            logger.info(f"check_and_finalize_login: current URL = {url}")
+            if ("linkedin.com" in url
+                    and "login" not in url
+                    and "authwall" not in url
+                    and "checkpoint" not in url
+                    and "challenge" not in url):
+                self._linkedin = LinkedInAutomation(self._page)
+                self._browser_ready = True
+                CookieManager.save_cookies(self._context, settings.cookies_file)
+                logger.info("Login confirmed and cookies saved.")
+                return True
+        except Exception:
+            pass
+
+        # Check all tabs as fallback
         for p in self._context.pages:
             try:
                 url = p.url.lower()
                 if ("linkedin.com" in url
                         and "login" not in url
-                        and "authwall" not in url):
+                        and "authwall" not in url
+                        and "checkpoint" not in url
+                        and "challenge" not in url):
                     self._page = p
                     self._linkedin = LinkedInAutomation(p)
                     self._browser_ready = True
                     CookieManager.save_cookies(self._context, settings.cookies_file)
-                    logger.info("Login confirmed and cookies saved.")
+                    logger.info("Login confirmed via tab and cookies saved.")
                     return True
             except Exception:
                 continue

@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { getWorkerStatus, loginLinkedIn, verifyLinkedIn } from '../api/client'
+import { useState, useEffect, useRef } from 'react'
+import { getWorkerStatus, loginLinkedIn, verifyLinkedIn, checkLogin } from '../api/client'
 
 interface Props {
   onStatusChange?: (connected: boolean) => void
@@ -12,8 +12,10 @@ export default function LinkedInStatus({ onStatusChange }: Props) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [verifyCode, setVerifyCode] = useState('')
+  const [showPinInput, setShowPinInput] = useState(false)
+  const verifyPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
-  // Poll worker status
+  // Poll worker status (general)
   useEffect(() => {
     const check = async () => {
       try {
@@ -31,6 +33,37 @@ export default function LinkedInStatus({ onStatusChange }: Props) {
     check()
     const interval = setInterval(check, 5000)
     return () => clearInterval(interval)
+  }, [status, onStatusChange])
+
+  // Auto-poll check-login while in verification state
+  useEffect(() => {
+    if (status !== 'verification') {
+      if (verifyPollRef.current) {
+        clearInterval(verifyPollRef.current)
+        verifyPollRef.current = null
+      }
+      return
+    }
+
+    verifyPollRef.current = setInterval(async () => {
+      try {
+        const result = await checkLogin()
+        if (result.logged_in) {
+          setStatus('connected')
+          setMessage('')
+          onStatusChange?.(true)
+        }
+      } catch {
+        // ignore
+      }
+    }, 4000)
+
+    return () => {
+      if (verifyPollRef.current) {
+        clearInterval(verifyPollRef.current)
+        verifyPollRef.current = null
+      }
+    }
   }, [status, onStatusChange])
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -57,7 +90,25 @@ export default function LinkedInStatus({ onStatusChange }: Props) {
     setLoading(false)
   }
 
-  const handleVerify = async (e: React.FormEvent) => {
+  const handleAppApproval = async () => {
+    setLoading(true)
+    setMessage('Checking if you approved in the LinkedIn app...')
+    try {
+      const result = await checkLogin()
+      if (result.logged_in) {
+        setStatus('connected')
+        setMessage('')
+        onStatusChange?.(true)
+      } else {
+        setMessage('Not approved yet. Approve in the LinkedIn app on your phone, then try again.')
+      }
+    } catch {
+      setMessage('Check failed. Please try again.')
+    }
+    setLoading(false)
+  }
+
+  const handleVerifyCode = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!verifyCode) return
     setLoading(true)
@@ -93,7 +144,7 @@ export default function LinkedInStatus({ onStatusChange }: Props) {
       <div className="flex items-center gap-3 mb-4">
         <div className={`w-3 h-3 rounded-full ${
           status === 'connecting' ? 'bg-yellow-400 animate-pulse' :
-          status === 'verification' ? 'bg-yellow-400' :
+          status === 'verification' ? 'bg-yellow-400 animate-pulse' :
           'bg-red-500'
         }`} />
         <span className="font-medium text-gray-800">
@@ -114,26 +165,55 @@ export default function LinkedInStatus({ onStatusChange }: Props) {
       )}
 
       {status === 'verification' ? (
-        <form onSubmit={handleVerify} className="flex gap-3 items-end">
-          <div className="flex-1">
-            <label className="block text-sm text-gray-600 mb-1">Verification Code</label>
-            <input
-              type="text"
-              value={verifyCode}
-              onChange={e => setVerifyCode(e.target.value)}
-              placeholder="Enter the code from your email/phone"
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
-              disabled={loading}
-            />
+        <div className="space-y-4">
+          {/* Option 1: App-based approval */}
+          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+            <p className="text-sm text-gray-700 mb-3">
+              LinkedIn sent a verification request to your phone. Open the LinkedIn app and tap <strong>"Yes, it's me"</strong>.
+            </p>
+            <div className="flex gap-3 items-center">
+              <button
+                onClick={handleAppApproval}
+                disabled={loading}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+              >
+                {loading ? 'Checking...' : "I approved it, check now"}
+              </button>
+              <span className="text-xs text-gray-400 animate-pulse">Auto-checking every few seconds...</span>
+            </div>
           </div>
-          <button
-            type="submit"
-            disabled={loading || !verifyCode}
-            className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
-          >
-            {loading ? 'Verifying...' : 'Verify'}
-          </button>
-        </form>
+
+          {/* Option 2: PIN code */}
+          {!showPinInput ? (
+            <button
+              onClick={() => setShowPinInput(true)}
+              className="text-sm text-blue-600 hover:underline"
+            >
+              Got a code via email/SMS instead? Click here
+            </button>
+          ) : (
+            <form onSubmit={handleVerifyCode} className="flex gap-3 items-end">
+              <div className="flex-1">
+                <label className="block text-sm text-gray-600 mb-1">Verification Code</label>
+                <input
+                  type="text"
+                  value={verifyCode}
+                  onChange={e => setVerifyCode(e.target.value)}
+                  placeholder="Enter code from email/SMS"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"
+                  disabled={loading}
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={loading || !verifyCode}
+                className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50"
+              >
+                {loading ? 'Verifying...' : 'Verify'}
+              </button>
+            </form>
+          )}
+        </div>
       ) : (
         <form onSubmit={handleLogin} className="flex gap-3 items-end">
           <div className="flex-1">
