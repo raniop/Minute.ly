@@ -6,6 +6,7 @@ blocking the FastAPI event loop.
 import asyncio
 import logging
 import random
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -45,7 +46,7 @@ class LinkedInWorker:
         self._linkedin: Optional[LinkedInAutomation] = None
         self._browser_ready = False
         self._loop_task = None
-        self._checking_login = False  # guard against concurrent check_and_finalize_login
+        self._login_check_lock = threading.Lock()  # guard against concurrent check_and_finalize_login
 
     @property
     def is_browser_ready(self) -> bool:
@@ -324,17 +325,20 @@ class LinkedInWorker:
             return False
 
         # Prevent concurrent calls (auto-poll + manual button click)
-        if self._checking_login:
-            logger.debug("check_and_finalize_login: already in progress, skipping")
+        if not self._login_check_lock.acquire(blocking=False):
+            logger.info("check_and_finalize_login: already in progress, skipping")
             return False
-        self._checking_login = True
 
         try:
             # Navigate directly to the feed — after app approval the session
             # cookies are valid, but the checkpoint page won't redirect on its own.
             logger.info("check_and_finalize_login: navigating to /feed to check session...")
-            self._page.goto("https://www.linkedin.com/feed", wait_until="domcontentloaded")
-            time.sleep(4)
+            self._page.goto(
+                "https://www.linkedin.com/feed",
+                wait_until="domcontentloaded",
+                timeout=15000,
+            )
+            time.sleep(3)
 
             # Check the main page URL
             url = self._page.url.lower()
@@ -349,20 +353,15 @@ class LinkedInWorker:
                 CookieManager.save_cookies(self._context, settings.cookies_file)
                 logger.info("Login confirmed and cookies saved.")
                 return True
-
-            # If feed redirected back to checkpoint, go back
-            try:
-                self._page.go_back(wait_until="domcontentloaded")
-                time.sleep(1)
-            except Exception:
-                pass
+            else:
+                logger.info(f"check_and_finalize_login: NOT logged in, URL still: {url}")
 
             return False
         except Exception as e:
-            logger.debug(f"check_and_finalize_login error: {e}")
+            logger.info(f"check_and_finalize_login ERROR: {e}")
             return False
         finally:
-            self._checking_login = False
+            self._login_check_lock.release()
 
     def _send_messages(self, task: WorkerTask):
         """Send initial messages to contacts."""
