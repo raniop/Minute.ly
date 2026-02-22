@@ -48,6 +48,9 @@ export const verifyLinkedIn = (code: string) =>
 export const checkLogin = () =>
   api.post<{ logged_in: boolean }>('/linkedin/check-login').then(r => r.data)
 
+export const logoutLinkedIn = () =>
+  api.post<{ status: string; message: string }>('/linkedin/logout').then(r => r.data)
+
 export const scrapeConnections = () =>
   api.post<JobStatus>('/linkedin/scrape-connections').then(r => r.data)
 

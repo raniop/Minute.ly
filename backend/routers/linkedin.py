@@ -50,6 +50,13 @@ async def check_login():
     }
 
 
+@router.post("/logout")
+async def logout():
+    """Disconnect from LinkedIn: close browser and clear cookies."""
+    result = await worker.logout()
+    return result
+
+
 @router.post("/scrape-connections")
 async def scrape_connections():
     """Trigger LinkedIn connection scraping job."""

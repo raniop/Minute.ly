@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { getWorkerStatus, loginLinkedIn, verifyLinkedIn, checkLogin } from '../api/client'
+import { getWorkerStatus, loginLinkedIn, verifyLinkedIn, checkLogin, logoutLinkedIn } from '../api/client'
 
 interface Props {
   onStatusChange?: (connected: boolean) => void
@@ -130,11 +130,37 @@ export default function LinkedInStatus({ onStatusChange }: Props) {
     setLoading(false)
   }
 
+  const handleDisconnect = async () => {
+    setLoading(true)
+    try {
+      await logoutLinkedIn()
+      setStatus('disconnected')
+      setEmail('')
+      setPassword('')
+      setMessage('')
+      setVerifyCode('')
+      setShowPinInput(false)
+      onStatusChange?.(false)
+    } catch {
+      setMessage('Failed to disconnect. Please try again.')
+    }
+    setLoading(false)
+  }
+
   if (status === 'connected') {
     return (
-      <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-6 flex items-center gap-3">
-        <div className="w-3 h-3 bg-green-500 rounded-full" />
-        <span className="text-green-800 font-medium">Connected to LinkedIn</span>
+      <div className="bg-green-50 border border-green-200 rounded-lg p-4 mb-6 flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="w-3 h-3 bg-green-500 rounded-full" />
+          <span className="text-green-800 font-medium">Connected to LinkedIn</span>
+        </div>
+        <button
+          onClick={handleDisconnect}
+          disabled={loading}
+          className="px-3 py-1.5 text-sm text-red-600 border border-red-300 rounded-lg hover:bg-red-50 disabled:opacity-50"
+        >
+          {loading ? 'Disconnecting...' : 'Disconnect'}
+        </button>
       </div>
     )
   }

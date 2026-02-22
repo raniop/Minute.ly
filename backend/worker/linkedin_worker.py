@@ -84,6 +84,20 @@ class LinkedInWorker:
         await self._run_in_pw_thread(self._close_browser)
         logger.info("LinkedIn worker stopped.")
 
+    async def logout(self) -> dict:
+        """Disconnect from LinkedIn: close browser and delete saved cookies."""
+        try:
+            await self._run_in_pw_thread(self._close_browser)
+            # Delete saved cookies so next login starts fresh
+            if settings.cookies_file.exists():
+                settings.cookies_file.unlink()
+                logger.info("Saved cookies deleted.")
+            logger.info("LinkedIn logout complete.")
+            return {"status": "ok", "message": "Disconnected from LinkedIn"}
+        except Exception as e:
+            logger.error(f"Logout error: {e}")
+            return {"status": "error", "message": str(e)}
+
     async def enqueue(self, task: WorkerTask) -> str:
         """Add a task to the queue. Returns task_id."""
         task_registry.register(task)
