@@ -41,9 +41,9 @@ async def submit_verification(req: VerifyRequest):
 
 
 @router.post("/check-login")
-def check_login():
-    """Check if manual login has been completed."""
-    success = worker.check_and_finalize_login()
+async def check_login():
+    """Check if manual login has been completed (runs in PW thread)."""
+    success = await worker.check_and_finalize_login_async()
     return {
         "logged_in": success,
         "browser_connected": worker.is_browser_ready,

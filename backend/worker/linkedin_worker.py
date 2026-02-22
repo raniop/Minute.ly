@@ -1,13 +1,14 @@
 """
 Background worker that runs Playwright tasks in a dedicated thread.
-Playwright is synchronous, so we use asyncio.to_thread() to avoid
-blocking the FastAPI event loop.
+Playwright is synchronous and thread-bound, so ALL Playwright operations
+must run in the same thread. We use a single-thread ThreadPoolExecutor
+to guarantee this.
 """
 import asyncio
 import logging
 import random
-import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -24,6 +25,10 @@ from backend.linkedin.cookies import CookieManager
 
 logger = logging.getLogger("minutely")
 
+# Single-thread executor ensures ALL Playwright calls happen on the same thread.
+# Playwright's sync API uses greenlets that are bound to the creating thread.
+_pw_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="playwright")
+
 
 class LinkedInWorker:
     """
@@ -32,7 +37,7 @@ class LinkedInWorker:
     Key design:
     - Persistent browser session (launched once, stays alive)
     - Tasks come from an asyncio.Queue
-    - Playwright runs synchronously in a dedicated thread
+    - ALL Playwright operations run in a single dedicated thread (_pw_executor)
     - Progress is tracked per-task via WorkerTask dataclass
     """
 
@@ -46,7 +51,7 @@ class LinkedInWorker:
         self._linkedin: Optional[LinkedInAutomation] = None
         self._browser_ready = False
         self._loop_task = None
-        self._login_check_lock = threading.Lock()  # guard against concurrent check_and_finalize_login
+        self._checking_login = False  # simple flag to skip concurrent checks
 
     @property
     def is_browser_ready(self) -> bool:
@@ -60,6 +65,11 @@ class LinkedInWorker:
             return "no_browser"
         return "idle"
 
+    async def _run_in_pw_thread(self, fn, *args):
+        """Run a function in the dedicated Playwright thread."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(_pw_executor, fn, *args)
+
     async def start(self):
         """Start the worker's processing loop."""
         self._running = True
@@ -71,7 +81,7 @@ class LinkedInWorker:
         self._running = False
         if self._loop_task:
             self._loop_task.cancel()
-        await asyncio.to_thread(self._close_browser)
+        await self._run_in_pw_thread(self._close_browser)
         logger.info("LinkedIn worker stopped.")
 
     async def enqueue(self, task: WorkerTask) -> str:
@@ -88,7 +98,7 @@ class LinkedInWorker:
         task.status = "running"
 
         try:
-            await asyncio.to_thread(self._do_launch_and_login)
+            await self._run_in_pw_thread(self._do_launch_and_login)
             task.status = "completed"
         except Exception as e:
             task.status = "failed"
@@ -111,7 +121,7 @@ class LinkedInWorker:
             logger.info(f"Processing task {task.task_id} ({task.task_type})...")
 
             try:
-                await asyncio.to_thread(self._execute_task, task)
+                await self._run_in_pw_thread(self._execute_task, task)
                 if task.status == "running":
                     task.status = "completed"
             except Exception as e:
@@ -160,21 +170,18 @@ class LinkedInWorker:
             wait_until="domcontentloaded",
         )
         self._browser_ready = False
-        # The frontend will poll /api/linkedin/status and show the login UI.
-        # User logs in manually in the Playwright window.
-        # We'll check login status when the next task comes in.
 
     async def credential_login(self, email: str, password: str) -> dict:
         """Login to LinkedIn with email/password via Playwright. Returns status dict."""
         try:
-            result = await asyncio.to_thread(self._do_credential_login, email, password)
+            result = await self._run_in_pw_thread(self._do_credential_login, email, password)
             return result
         except Exception as e:
             logger.error(f"Credential login failed: {e}")
             return {"status": "failed", "message": str(e)}
 
     def _do_credential_login(self, email: str, password: str) -> dict:
-        """Fill in LinkedIn login form with credentials (runs in thread)."""
+        """Fill in LinkedIn login form with credentials (runs in PW thread)."""
         self._close_browser()
         self._pw, self._browser, self._context, self._page = launch_browser()
 
@@ -242,14 +249,14 @@ class LinkedInWorker:
     async def submit_verification(self, code: str) -> dict:
         """Submit a verification code on the checkpoint page."""
         try:
-            result = await asyncio.to_thread(self._do_submit_verification, code)
+            result = await self._run_in_pw_thread(self._do_submit_verification, code)
             return result
         except Exception as e:
             logger.error(f"Verification failed: {e}")
             return {"status": "failed", "message": str(e)}
 
     def _do_submit_verification(self, code: str) -> dict:
-        """Fill in verification code on checkpoint page (runs in thread)."""
+        """Fill in verification code on checkpoint page (runs in PW thread)."""
         if not self._page:
             return {"status": "failed", "message": "No browser session. Login first."}
 
@@ -315,8 +322,17 @@ class LinkedInWorker:
             logger.error(f"Verification error: {e}")
             return {"status": "failed", "message": str(e)}
 
-    def check_and_finalize_login(self) -> bool:
+    async def check_and_finalize_login_async(self) -> bool:
+        """Async wrapper — runs the check in the Playwright thread."""
+        try:
+            return await self._run_in_pw_thread(self._check_and_finalize_login_sync)
+        except Exception as e:
+            logger.info(f"check_and_finalize_login_async error: {e}")
+            return False
+
+    def _check_and_finalize_login_sync(self) -> bool:
         """Check if user has logged in (e.g. after app-based approval).
+        MUST run in the Playwright thread.
 
         After app-based approval, the checkpoint page doesn't auto-redirect.
         We navigate directly to the feed to check if the session is now valid.
@@ -324,10 +340,11 @@ class LinkedInWorker:
         if not self._page:
             return False
 
-        # Prevent concurrent calls (auto-poll + manual button click)
-        if not self._login_check_lock.acquire(blocking=False):
+        # Skip if already checking (from a concurrent poll)
+        if self._checking_login:
             logger.info("check_and_finalize_login: already in progress, skipping")
             return False
+        self._checking_login = True
 
         try:
             # Navigate directly to the feed — after app approval the session
@@ -361,7 +378,7 @@ class LinkedInWorker:
             logger.info(f"check_and_finalize_login ERROR: {e}")
             return False
         finally:
-            self._login_check_lock.release()
+            self._checking_login = False
 
     def _send_messages(self, task: WorkerTask):
         """Send initial messages to contacts."""
