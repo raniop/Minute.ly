@@ -101,13 +101,12 @@ def get_templates(
     return results
 
 
-def queue_initial_messages(
+async def queue_initial_messages(
     db: Session, items: list[SendItem]
 ) -> JobStatusOut:
     """Create message rows and queue them for sending via the worker."""
     from backend.worker.linkedin_worker import worker
     from backend.worker.task_queue import WorkerTask, TaskType
-    import asyncio
 
     message_ids = []
     for item in items:
@@ -136,20 +135,17 @@ def queue_initial_messages(
     )
     task.total = len(message_ids)
 
-    # Enqueue async from sync context
-    loop = asyncio.get_event_loop()
-    loop.create_task(worker.enqueue(task))
+    await worker.enqueue(task)
 
     return JobStatusOut(**task.to_dict())
 
 
-def queue_followup_messages(
+async def queue_followup_messages(
     db: Session, items: list[FollowUpSendItem]
 ) -> JobStatusOut:
     """Create follow-up message rows and queue them for sending."""
     from backend.worker.linkedin_worker import worker
     from backend.worker.task_queue import WorkerTask, TaskType
-    import asyncio
 
     message_ids = []
     for item in items:
@@ -180,7 +176,6 @@ def queue_followup_messages(
     )
     task.total = len(message_ids)
 
-    loop = asyncio.get_event_loop()
-    loop.create_task(worker.enqueue(task))
+    await worker.enqueue(task)
 
     return JobStatusOut(**task.to_dict())
