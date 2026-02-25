@@ -466,10 +466,17 @@ class LinkedInWorker:
 
     def _scrape_connections(self, task: WorkerTask):
         """Scrape LinkedIn connections and upsert into database."""
-        task.status = "running"
+        task.status = "scrolling"
         print(f"[SCRAPER] Starting scrape, page URL: {self._page.url if self._page else 'no page'}")
 
-        connections = self._linkedin.scrape_connections_list()
+        def on_scroll_progress(connections_found: int):
+            task.progress = connections_found
+
+        connections = self._linkedin.scrape_connections_list(
+            progress_callback=on_scroll_progress
+        )
+        task.status = "saving"
+        task.progress = 0
         task.total = len(connections)
         print(f"[SCRAPER] Found {len(connections)} connections")
 

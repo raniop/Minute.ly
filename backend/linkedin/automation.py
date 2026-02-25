@@ -738,11 +738,15 @@ class LinkedInAutomation:
 
     # --- Connection Scraping ---
 
-    def scrape_connections_list(self, max_scrolls: int = 50) -> list[dict]:
+    def scrape_connections_list(self, max_scrolls: int = 600, progress_callback=None) -> list[dict]:
         """
         Navigate to LinkedIn connections page and scrape all connections.
         Uses JavaScript-based extraction since LinkedIn uses obfuscated CSS classes.
         Returns list of dicts: {profile_url, full_name, title}
+
+        Args:
+            max_scrolls: Maximum scroll iterations (600 supports ~6000 connections)
+            progress_callback: Optional callable(connections_found: int) called during scrolling
         """
         print(f"[SCRAPER] Navigating to connections page...")
         self.page.goto(
@@ -773,16 +777,22 @@ class LinkedInAutomation:
                 """document.querySelectorAll('a[href*="/in/"]').length"""
             )
 
+            approx_connections = current_count // 3
+
             if current_count == last_count:
                 no_change_count += 1
-                if no_change_count >= 3:
+                if no_change_count >= 5:
                     break
             else:
                 no_change_count = 0
                 last_count = current_count
 
+            # Report progress during scrolling
+            if progress_callback:
+                progress_callback(approx_connections)
+
             self.logger.info(
-                f"Scroll {scroll_num + 1}: ~{current_count // 3} connections loaded"
+                f"Scroll {scroll_num + 1}: ~{approx_connections} connections loaded"
             )
 
         # Extract connection data using JavaScript

@@ -1,10 +1,11 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { getContacts, getContactStats, scrapeConnections, getJobStatus } from '../api/client'
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import LinkedInStatus from '../components/LinkedInStatus'
 
 export default function ContactList() {
   const [industry, setIndustry] = useState('')
+  const [search, setSearch] = useState('')
   const [browserConnected, setBrowserConnected] = useState(false)
   const [scraping, setScraping] = useState(false)
   const [scrapeJobId, setScrapeJobId] = useState<string | null>(null)
@@ -20,6 +21,16 @@ export default function ContactList() {
           : { connected_only: 'true' }
       ),
   })
+
+  const filteredContacts = useMemo(() => {
+    if (!contacts || !search.trim()) return contacts
+    const q = search.toLowerCase()
+    return contacts.filter(c =>
+      c.full_name?.toLowerCase().includes(q) ||
+      c.title?.toLowerCase().includes(q) ||
+      c.company?.toLowerCase().includes(q)
+    )
+  }, [contacts, search])
 
   const { data: stats } = useQuery({
     queryKey: ['contactStats'],
@@ -74,11 +85,6 @@ export default function ContactList() {
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold text-gray-900">All Contacts</h1>
         <div className="flex items-center gap-3">
-          {scraping && scrapeProgress.total > 0 && (
-            <span className="text-sm text-gray-500">
-              {scrapeProgress.progress}/{scrapeProgress.total} scraped
-            </span>
-          )}
           <button
             onClick={handleScrape}
             disabled={scraping || !browserConnected}
@@ -89,6 +95,34 @@ export default function ContactList() {
           </button>
         </div>
       </div>
+
+      {scraping && (
+        <div className="mb-4 p-4 bg-green-50 border border-green-200 rounded-lg">
+          <div className="flex items-center gap-2 mb-2">
+            <div className="animate-spin w-4 h-4 border-2 border-green-600 border-t-transparent rounded-full" />
+            <span className="text-sm font-medium text-green-800">
+              {scrapeProgress.status === 'scrolling'
+                ? `Loading connections from LinkedIn... ${scrapeProgress.progress > 0 ? scrapeProgress.progress.toLocaleString() + ' found' : ''}`
+                : scrapeProgress.status === 'saving'
+                ? `Saving to database... ${scrapeProgress.progress.toLocaleString()}/${scrapeProgress.total.toLocaleString()}`
+                : 'Starting scrape...'}
+            </span>
+          </div>
+          {scrapeProgress.status === 'saving' && scrapeProgress.total > 0 && (
+            <div className="bg-green-200 rounded-full h-2">
+              <div
+                className="bg-green-600 h-2 rounded-full transition-all"
+                style={{ width: `${(scrapeProgress.progress / scrapeProgress.total) * 100}%` }}
+              />
+            </div>
+          )}
+          {scrapeProgress.status === 'scrolling' && (
+            <div className="bg-green-200 rounded-full h-2 overflow-hidden">
+              <div className="bg-green-600 h-2 rounded-full animate-pulse w-full opacity-30" />
+            </div>
+          )}
+        </div>
+      )}
 
       {stats && (
         <div className="grid grid-cols-4 gap-4 mb-6">
@@ -111,7 +145,14 @@ export default function ContactList() {
         </div>
       )}
 
-      <div className="mb-4">
+      <div className="mb-4 flex items-center gap-3">
+        <input
+          type="text"
+          placeholder="Search by name, title, or company..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="border border-gray-300 rounded-lg px-3 py-2 text-sm w-72"
+        />
         <select
           value={industry}
           onChange={(e) => setIndustry(e.target.value)}
@@ -123,6 +164,11 @@ export default function ContactList() {
           <option value="Entertainment">Entertainment</option>
           <option value="Unknown">Unknown</option>
         </select>
+        {search && filteredContacts && (
+          <span className="text-sm text-gray-500">
+            {filteredContacts.length} results
+          </span>
+        )}
       </div>
 
       {isLoading ? (
@@ -141,7 +187,7 @@ export default function ContactList() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {contacts?.map((contact) => (
+              {filteredContacts?.map((contact) => (
                 <tr key={contact.id} className="hover:bg-gray-50">
                   <td className="px-4 py-3">
                     <a
@@ -182,7 +228,7 @@ export default function ContactList() {
                   </td>
                 </tr>
               ))}
-              {(!contacts || contacts.length === 0) && (
+              {(!filteredContacts || filteredContacts.length === 0) && (
                 <tr>
                   <td colSpan={6} className="px-4 py-8 text-center text-gray-500">
                     No contacts found. {browserConnected ? 'Click "Scrape LinkedIn Connections" to get started.' : 'Login to LinkedIn first, then scrape your connections.'}
