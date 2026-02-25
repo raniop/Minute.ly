@@ -430,41 +430,42 @@ class LinkedInAutomation:
             self.logger.error(f"File chooser failed: {e}")
             return False
 
-        # Wait for upload
+        # Wait for upload to complete.
+        # LinkedIn disables the Send button while uploading. We wait until
+        # the Send button becomes enabled again. Timeout: 120 seconds.
         self.logger.debug("Waiting for video upload to complete...")
         upload_complete = False
-        upload_indicators = [
-            ".msg-form__media-attachment-container",
-            ".msg-form__attachment",
-            "div[class*='media-attachment']",
-            "div[class*='file-attachment']",
-            "img[class*='media']",
-            "video",
-        ]
 
-        for _ in range(8):
-            for sel in upload_indicators:
-                try:
-                    el = self.page.locator(sel)
-                    if el.is_visible(timeout=500):
-                        upload_complete = True
-                        break
-                except Exception:
-                    continue
-            if upload_complete:
-                break
-            time.sleep(1)
+        for attempt in range(60):  # 60 × 2s = 120 seconds max
+            # Primary check: Send button becomes enabled after upload finishes
+            try:
+                send_btn = self.page.locator(
+                    "button.msg-form__send-button[type='submit']"
+                ).first
+                if send_btn.is_visible(timeout=500) and not send_btn.is_disabled():
+                    self.logger.info(
+                        f"Video upload complete (Send enabled after ~{attempt * 2}s)."
+                    )
+                    upload_complete = True
+                    break
+            except Exception:
+                pass
+
+            if attempt % 10 == 9:
+                self.logger.debug(
+                    f"Still waiting for video upload... ({(attempt + 1) * 2}s)"
+                )
+
+            time.sleep(2)
 
         if upload_complete:
-            self.logger.info("Video attached successfully (upload complete).")
             return True
         else:
             self.logger.warning(
-                "Could not confirm video upload preview, "
-                "but proceeding (file may still be processing)."
+                "Video upload did not complete within 120s. "
+                "Send button may still be disabled."
             )
-            time.sleep(2)
-            return True
+            return False
 
     # --- Messaging ---
 

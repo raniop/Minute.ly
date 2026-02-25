@@ -19,6 +19,9 @@ const api = axios.create({
 export const getTodayBatch = () =>
   api.get<TodayBatch>('/batches/today').then(r => r.data)
 
+export const refreshTodayBatch = (keepContactIds: number[]) =>
+  api.post<TodayBatch>('/batches/today/refresh', { keep_contact_ids: keepContactIds }).then(r => r.data)
+
 export const sendTodayMessages = (items: SendItem[]) =>
   api.post<JobStatus>('/batches/today/send', { items }).then(r => r.data)
 

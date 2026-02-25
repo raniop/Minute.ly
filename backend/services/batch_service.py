@@ -109,6 +109,90 @@ def get_or_create_today_batch(db: Session) -> TodayBatchOut:
     return TodayBatchOut(batch_date=today, contacts=contacts)
 
 
+def refresh_unselected(db: Session, keep_contact_ids: list[int]) -> TodayBatchOut:
+    """Replace unselected contacts in today's batch with new ones.
+
+    Contacts whose IDs are in keep_contact_ids stay in the batch.
+    All other entries are removed and replaced with fresh eligible contacts
+    so the batch stays at batch_size (10).
+    """
+    today = date.today()
+
+    batch = (
+        db.query(DailyBatch)
+        .filter(DailyBatch.batch_date == today)
+        .first()
+    )
+
+    if not batch:
+        # No batch exists yet — just create a fresh one
+        return get_or_create_today_batch(db)
+
+    # Remove entries that are NOT in keep_contact_ids
+    kept_entries = []
+    for entry in batch.entries:
+        if entry.contact_id in keep_contact_ids:
+            kept_entries.append(entry)
+        else:
+            db.delete(entry)
+
+    db.flush()
+
+    # How many new contacts do we need?
+    slots_available = settings.batch_size - len(kept_entries)
+
+    if slots_available <= 0:
+        # All slots are kept — just return current batch
+        db.commit()
+        return get_or_create_today_batch(db)
+
+    # IDs already in this batch (kept ones)
+    existing_ids = {e.contact_id for e in kept_entries}
+
+    # Find new eligible contacts
+    cutoff = datetime.utcnow() - timedelta(days=settings.cooldown_days)
+
+    already_messaged_ids = (
+        db.query(Message.contact_id)
+        .filter(
+            Message.message_type == "initial",
+            Message.status == "sent",
+        )
+        .subquery()
+    )
+
+    new_eligible = (
+        db.query(Contact)
+        .filter(
+            Contact.is_connected == True,  # noqa: E712
+            or_(
+                Contact.last_shown_at.is_(None),
+                Contact.last_shown_at < cutoff,
+            ),
+            ~Contact.id.in_(already_messaged_ids),
+            ~Contact.id.in_(existing_ids) if existing_ids else True,
+        )
+        .order_by(Contact.last_shown_at.asc().nullsfirst())
+        .limit(slots_available)
+        .all()
+    )
+
+    for contact in new_eligible:
+        contact.last_shown_at = datetime.utcnow()
+        entry = DailyBatchContact(
+            batch_id=batch.id,
+            contact_id=contact.id,
+        )
+        db.add(entry)
+
+    db.commit()
+    logger.info(
+        f"Refreshed today's batch: kept {len(kept_entries)}, "
+        f"added {len(new_eligible)} new contacts."
+    )
+    return get_or_create_today_batch(db)
+
+
 def get_followup_contacts(db: Session) -> FollowUpBatchOut:
     """Get contacts who were messaged 2 days ago and haven't replied."""
     two_days_ago_start = datetime.combine(

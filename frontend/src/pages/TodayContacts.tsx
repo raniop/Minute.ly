@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
-import { useQuery, useMutation } from '@tanstack/react-query'
-import { getTodayBatch, sendTodayMessages, getJobStatus } from '../api/client'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { getTodayBatch, sendTodayMessages, refreshTodayBatch, getJobStatus } from '../api/client'
 import ContactCard from '../components/ContactCard'
 import type { SendItem } from '../types'
 
@@ -11,6 +11,8 @@ interface ContactState {
 }
 
 export default function TodayContacts() {
+  const queryClient = useQueryClient()
+
   const { data: batch, isLoading, error } = useQuery({
     queryKey: ['todayBatch'],
     queryFn: getTodayBatch,
@@ -25,14 +27,17 @@ export default function TodayContacts() {
     if (batch?.contacts) {
       const states: Record<number, ContactState> = {}
       batch.contacts.forEach((bc) => {
+        // Preserve selection state for contacts that were already in the list
+        const existing = contactStates[bc.contact.id]
         states[bc.contact.id] = {
-          selected: false,
-          message: bc.suggested_message,
-          attachVideo: true,
+          selected: existing?.selected ?? false,
+          message: existing?.message ?? bc.suggested_message,
+          attachVideo: existing?.attachVideo ?? true,
         }
       })
       setContactStates(states)
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [batch])
 
   // Poll job status
@@ -61,7 +66,15 @@ export default function TodayContacts() {
     },
   })
 
+  const refreshMutation = useMutation({
+    mutationFn: (keepIds: number[]) => refreshTodayBatch(keepIds),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['todayBatch'] })
+    },
+  })
+
   const selectedCount = Object.values(contactStates).filter((s) => s.selected).length
+  const unselectedCount = (batch?.contacts.length || 0) - selectedCount
 
   const handleSelectAll = () => {
     const allSelected = selectedCount === batch?.contacts.length
@@ -72,6 +85,15 @@ export default function TodayContacts() {
       }
       return next
     })
+  }
+
+  const handleRefresh = () => {
+    if (!batch) return
+    // Keep only the selected contacts, replace the rest
+    const keepIds = batch.contacts
+      .filter((bc) => contactStates[bc.contact.id]?.selected)
+      .map((bc) => bc.contact.id)
+    refreshMutation.mutate(keepIds)
   }
 
   const handleSend = () => {
@@ -87,6 +109,7 @@ export default function TodayContacts() {
   }
 
   const isSending = !!jobId || sendMutation.isPending
+  const remaining = jobProgress.total - jobProgress.progress
 
   if (isLoading) {
     return (
@@ -115,6 +138,17 @@ export default function TodayContacts() {
         </div>
         <div className="flex gap-3">
           <button
+            onClick={handleRefresh}
+            disabled={isSending || refreshMutation.isPending || unselectedCount === 0}
+            className="px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+            title={unselectedCount > 0
+              ? `Replace ${unselectedCount} unselected contact${unselectedCount === 1 ? '' : 's'} with new ones`
+              : 'Select contacts to keep, then refresh to replace the rest'
+            }
+          >
+            {refreshMutation.isPending ? 'Refreshing...' : `Refresh (${unselectedCount})`}
+          </button>
+          <button
             onClick={handleSelectAll}
             disabled={isSending}
             className="px-4 py-2 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
@@ -138,7 +172,10 @@ export default function TodayContacts() {
           <div className="flex items-center gap-2">
             <div className="animate-spin w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full" />
             <span className="text-sm text-blue-700">
-              Sending messages via LinkedIn... ({jobProgress.progress}/{jobProgress.total})
+              Sending message {jobProgress.progress + 1} of {jobProgress.total} via LinkedIn...
+              {remaining > 0 && jobProgress.progress > 0 && (
+                <span className="text-blue-500"> (next message in ~90 seconds)</span>
+              )}
             </span>
           </div>
           <div className="mt-2 bg-blue-200 rounded-full h-2">

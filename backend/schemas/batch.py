@@ -29,6 +29,10 @@ class SendRequest(BaseModel):
     items: list[SendItem]
 
 
+class RefreshRequest(BaseModel):
+    keep_contact_ids: list[int] = []
+
+
 class FollowUpItem(BaseModel):
     contact: ContactOut
     original_message_date: datetime
