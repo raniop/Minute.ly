@@ -1647,28 +1647,17 @@ class OutreachOrchestrator:
         appears inline in the chat with a Play button. The text references
         the attached video instead of an external link.
         """
-        templates = {
-            "Sports": (
-                f"Hi {name}, great to connect! I wanted to show you our H2V AI "
-                f"model that converts horizontal videos to vertical.\n"
-                f"Fox, Paramount, Univision and sports leagues are using it "
-                f"and it works like a charm.\n"
-                f"Here's a 30s demo I attached below!"
-            ),
-            "News": (
-                f"Hi {name}, great to connect! For publishers, breaking news "
-                f"needs to be vertical fast. Our H2V AI model automates this.\n"
-                f"Fox, Paramount, and Univision are already using it.\n"
-                f"I attached a 30s demo below!"
-            ),
-            "Entertainment": (
-                f"Hi {name}, great to connect! I wanted to show you our H2V AI "
-                f"model that converts horizontal video to vertical instantly.\n"
-                f"Fox, Paramount, Univision are using it and it works like a "
-                f"charm.\nAttached a quick 30s demo!"
-            ),
-        }
-        return templates.get(industry, templates["Entertainment"])
+        msg = (
+            f"Hi {name},\n"
+            f"Great to connect, and thanks for accepting the invite.\n"
+            f"I wanted to share something we've built at Minute-ly.com, "
+            f" an AI model that instantly transforms horizontal video into "
+            f"vertical format at scale. It's already being used by major "
+            f"organizations including Fox, Paramount, Formula 1, NASCAR, "
+            f"ATP Tour, Univision, and others.\n"
+            f"Sharing a quick 30-second demo here - would love to hear your thoughts."
+        )
+        return msg
 
     @staticmethod
     def build_message_2(name: str) -> str:

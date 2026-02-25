@@ -19,26 +19,44 @@ logger = logging.getLogger("minutely")
 TEMPLATES = {
     "initial": {
         "Sports": (
-            "Hi {name}, I came across your work at {company} and wanted to share "
-            "something relevant. We built an H2V AI model that verticalizes "
-            "horizontal sports content in seconds -- already used by Fox, Paramount, "
-            "and Univision. Attached a 30s demo. Would love to hear your thoughts!"
+            "Hi {name},\n"
+            "Great to connect, and thanks for accepting the invite.\n"
+            "I wanted to share something we've built at Minute-ly.com, "
+            " an AI model that instantly transforms horizontal video into "
+            "vertical format at scale. It's already being used by major "
+            "organizations including Fox, Paramount, Formula 1, NASCAR, "
+            "ATP Tour, Univision, and others.\n"
+            "Sharing a quick 30-second demo here - would love to hear your thoughts."
         ),
         "News": (
-            "Hi {name}, for news publishers, breaking stories need to go vertical "
-            "fast. We built an H2V AI model that does this automatically -- already "
-            "used by Fox, Paramount, and Univision. Attached a quick demo!"
+            "Hi {name},\n"
+            "Great to connect, and thanks for accepting the invite.\n"
+            "I wanted to share something we've built at Minute-ly.com, "
+            " an AI model that instantly transforms horizontal video into "
+            "vertical format at scale. It's already being used by major "
+            "organizations including Fox, Paramount, Formula 1, NASCAR, "
+            "ATP Tour, Univision, and others.\n"
+            "Sharing a quick 30-second demo here - would love to hear your thoughts."
         ),
         "Entertainment": (
-            "Hi {name}, saw {company}'s content strategy. We built an H2V AI model "
-            "that turns horizontal video into vertical automatically -- boosting "
-            "engagement across platforms. Used by Fox, Paramount, Univision. "
-            "Attached a demo!"
+            "Hi {name},\n"
+            "Great to connect, and thanks for accepting the invite.\n"
+            "I wanted to share something we've built at Minute-ly.com, "
+            " an AI model that instantly transforms horizontal video into "
+            "vertical format at scale. It's already being used by major "
+            "organizations including Fox, Paramount, Formula 1, NASCAR, "
+            "ATP Tour, Univision, and others.\n"
+            "Sharing a quick 30-second demo here - would love to hear your thoughts."
         ),
         "Unknown": (
-            "Hi {name}, wanted to share something we built -- an AI model that "
-            "verticalizes horizontal video instantly. Already used by Fox, Paramount, "
-            "and Univision. Attached a quick 30s demo!"
+            "Hi {name},\n"
+            "Great to connect, and thanks for accepting the invite.\n"
+            "I wanted to share something we've built at Minute-ly.com, "
+            " an AI model that instantly transforms horizontal video into "
+            "vertical format at scale. It's already being used by major "
+            "organizations including Fox, Paramount, Formula 1, NASCAR, "
+            "ATP Tour, Univision, and others.\n"
+            "Sharing a quick 30-second demo here - would love to hear your thoughts."
         ),
     },
     "followup": {
