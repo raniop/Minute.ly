@@ -397,42 +397,94 @@ class LinkedInAutomation:
         """Attach a video file in the currently open message overlay."""
         self.logger.debug(f"Attaching video: {video_path}")
 
-        attach_btn = None
-        attach_selectors = [
-            "button[aria-label*='Attach' i]",
-            "button[aria-label*='attach' i]",
-            ".msg-form__footer-action button[aria-label*='Attach' i]",
-            ".msg-form__left-actions button[aria-label*='Attach' i]",
-            "button[data-control-name*='attach' i]",
-        ]
+        file_set = False
 
-        for sel in attach_selectors:
-            try:
-                el = self.page.locator(sel).first
-                if el.is_visible(timeout=3000):
-                    attach_btn = el
-                    self.logger.debug(f"Found attachment button: {sel}")
-                    break
-            except Exception:
-                continue
-
-        if attach_btn is None:
-            self.logger.warning("Could not find attachment/paperclip button.")
-            return False
-
+        # Strategy 1: Set file directly on hidden input[type="file"]
+        # LinkedIn has a hidden file input in the message form -- setting files
+        # directly bypasses the button click and file chooser dialog entirely.
         try:
-            with self.page.expect_file_chooser(timeout=10000) as fc_info:
-                attach_btn.click()
-            file_chooser = fc_info.value
-            file_chooser.set_files(str(video_path))
-            self.logger.debug("Video file set in file chooser.")
+            file_input = self.page.locator(
+                '.msg-overlay-conversation-bubble input[type="file"], '
+                '.msg-form input[type="file"], '
+                'input[type="file"]'
+            ).first
+            file_input.set_input_files(str(video_path))
+            file_set = True
+            self.logger.debug("Video file set via direct input[type='file'].")
         except Exception as e:
-            self.logger.error(f"File chooser failed: {e}")
-            return False
+            self.logger.debug(f"Direct file input failed: {e}")
+
+        # Strategy 2: Click attachment button → file chooser
+        if not file_set:
+            attach_btn = None
+            attach_selectors = [
+                "button[aria-label*='Attach' i]",
+                "button[aria-label*='file' i]",
+                ".msg-form__footer-action button[aria-label*='Attach' i]",
+                ".msg-form__left-actions button[aria-label*='Attach' i]",
+                "button[data-control-name*='attach' i]",
+                ".msg-form__left-actions button",
+            ]
+
+            for sel in attach_selectors:
+                try:
+                    el = self.page.locator(sel).first
+                    if el.is_visible(timeout=2000):
+                        attach_btn = el
+                        self.logger.debug(f"Found attachment button: {sel}")
+                        break
+                except Exception:
+                    continue
+
+            # JavaScript fallback: search buttons in message overlay
+            if attach_btn is None:
+                try:
+                    attach_handle = self.page.evaluate_handle("""
+                        () => {
+                            const areas = document.querySelectorAll(
+                                '.msg-form, .msg-overlay-conversation-bubble, [class*="msg-form"]'
+                            );
+                            for (const area of areas) {
+                                for (const btn of area.querySelectorAll('button')) {
+                                    const label = (btn.getAttribute('aria-label') || '').toLowerCase();
+                                    if (label.includes('attach') || label.includes('file') ||
+                                        label.includes('צרף') || label.includes('קובץ')) {
+                                        const r = btn.getBoundingClientRect();
+                                        if (r.width > 0 && r.height > 0) return btn;
+                                    }
+                                }
+                            }
+                            return null;
+                        }
+                    """)
+                    if attach_handle and attach_handle.as_element():
+                        attach_btn = attach_handle.as_element()
+                        self.logger.debug("Found attachment button via JavaScript.")
+                except Exception:
+                    pass
+
+            if attach_btn is None:
+                self.logger.warning("Could not find attachment/paperclip button.")
+                return False
+
+            try:
+                with self.page.expect_file_chooser(timeout=10000) as fc_info:
+                    attach_btn.click()
+                file_chooser = fc_info.value
+                file_chooser.set_files(str(video_path))
+                file_set = True
+                self.logger.debug("Video file set in file chooser.")
+            except Exception as e:
+                self.logger.error(f"File chooser failed: {e}")
+                return False
 
         # Wait for upload to complete.
         # LinkedIn disables the Send button while uploading. We wait until
         # the Send button becomes enabled again. Timeout: 120 seconds.
+        # Initial delay: give LinkedIn time to register the file and disable
+        # the Send button before we start checking (otherwise we might see
+        # Send enabled from the message text and return immediately).
+        time.sleep(3)
         self.logger.debug("Waiting for video upload to complete...")
         upload_complete = False
 
@@ -596,8 +648,31 @@ class LinkedInAutomation:
         # Step 3: Type the message
         try:
             message_box.click(force=True)
+            time.sleep(0.3)
+            # Clear any existing content
+            self.page.keyboard.press("Control+a")
+            time.sleep(0.1)
+            self.page.keyboard.press("Delete")
+            time.sleep(0.2)
+            # Use execCommand('insertText') which properly integrates with
+            # contenteditable editors by dispatching beforeinput + input events.
+            # Previous approaches that failed:
+            #   fill() → set innerHTML directly, editor ignored the text
+            #   insert_text() → dispatched InputEvent but editor still didn't register
+            inserted = self.page.evaluate(
+                "(text) => document.execCommand('insertText', false, text)",
+                message
+            )
+            if not inserted:
+                # Fallback: type line by line (Shift+Enter for newlines to avoid
+                # triggering LinkedIn's "Enter to send" behavior)
+                self.logger.debug("execCommand failed, falling back to keyboard.type()...")
+                lines = message.split('\n')
+                for i, line in enumerate(lines):
+                    if i > 0:
+                        self.page.keyboard.press("Shift+Enter")
+                    self.page.keyboard.type(line, delay=5)
             time.sleep(0.5)
-            message_box.fill(message)
             self.logger.debug(f"Typed message ({len(message)} chars).")
         except Exception as e:
             self.logger.error(f"Failed to type message: {e}")
@@ -650,7 +725,25 @@ class LinkedInAutomation:
                     )
 
             send_btn.click(force=True)
-            time.sleep(1)
+            time.sleep(1.5)
+
+            # Verify message was actually sent by checking if the input was cleared.
+            # LinkedIn clears the message box after a successful send.
+            try:
+                remaining = message_box.inner_text().strip()
+                if len(remaining) > 20:
+                    self.logger.warning(
+                        f"Message input not cleared after Send ({len(remaining)} chars remain). "
+                        "Retrying with Enter key..."
+                    )
+                    # Retry with Enter key (LinkedIn's default send shortcut)
+                    message_box.click(force=True)
+                    time.sleep(0.2)
+                    self.page.keyboard.press("Enter")
+                    time.sleep(1.5)
+            except Exception:
+                pass  # message_box may no longer be valid after overlay change
+
             self.logger.info("Message sent successfully.")
             self._close_message_overlay()
             return True
