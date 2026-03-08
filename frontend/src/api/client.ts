@@ -48,8 +48,8 @@ export const loginLinkedIn = (email: string, password: string) =>
 export const verifyLinkedIn = (code: string) =>
   api.post<LoginResponse>('/linkedin/verify', { code }).then(r => r.data)
 
-export const checkLogin = () =>
-  api.post<{ logged_in: boolean }>('/linkedin/check-login').then(r => r.data)
+export const checkLogin = (force: boolean = false) =>
+  api.post<{ logged_in: boolean }>('/linkedin/check-login', { force }).then(r => r.data)
 
 export const logoutLinkedIn = () =>
   api.post<{ status: string; message: string }>('/linkedin/logout').then(r => r.data)

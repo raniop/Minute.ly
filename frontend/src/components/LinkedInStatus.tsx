@@ -47,7 +47,8 @@ export default function LinkedInStatus({ onStatusChange }: Props) {
 
     verifyPollRef.current = setInterval(async () => {
       try {
-        const result = await checkLogin()
+        // force=false: gentle check, only reloads checkpoint page
+        const result = await checkLogin(false)
         if (result.logged_in) {
           setStatus('connected')
           setMessage('')
@@ -94,7 +95,8 @@ export default function LinkedInStatus({ onStatusChange }: Props) {
     setLoading(true)
     setMessage('Checking if you approved in the LinkedIn app...')
     try {
-      const result = await checkLogin()
+      // force=true: user clicked button, navigate to /feed to verify
+      const result = await checkLogin(true)
       if (result.logged_in) {
         setStatus('connected')
         setMessage('')

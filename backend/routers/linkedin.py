@@ -16,6 +16,10 @@ class VerifyRequest(BaseModel):
     code: str
 
 
+class CheckLoginRequest(BaseModel):
+    force: bool = False
+
+
 @router.get("/status")
 def get_worker_status():
     """Check LinkedIn worker and browser status."""
@@ -24,6 +28,12 @@ def get_worker_status():
         "browser_connected": worker.is_browser_ready,
         "active_job": None,
     }
+
+
+@router.get("/debug")
+def get_debug_info():
+    """Return current browser page state for debugging."""
+    return worker.get_debug_info()
 
 
 @router.post("/login")
@@ -41,9 +51,14 @@ async def submit_verification(req: VerifyRequest):
 
 
 @router.post("/check-login")
-async def check_login():
-    """Check if manual login has been completed (runs in PW thread)."""
-    success = await worker.check_and_finalize_login_async()
+async def check_login(req: CheckLoginRequest = CheckLoginRequest()):
+    """Check if manual login has been completed (runs in PW thread).
+
+    Pass force=true when user explicitly clicks the check button.
+    Auto-polls should use force=false (default) to avoid navigating
+    away from the checkpoint page.
+    """
+    success = await worker.check_and_finalize_login_async(force=req.force)
     return {
         "logged_in": success,
         "browser_connected": worker.is_browser_ready,

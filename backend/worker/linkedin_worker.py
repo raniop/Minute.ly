@@ -336,20 +336,48 @@ class LinkedInWorker:
             logger.error(f"Verification error: {e}")
             return {"status": "failed", "message": str(e)}
 
-    async def check_and_finalize_login_async(self) -> bool:
-        """Async wrapper — runs the check in the Playwright thread."""
+    async def check_and_finalize_login_async(self, force: bool = False) -> bool:
+        """Async wrapper — runs the check in the Playwright thread.
+
+        Args:
+            force: If True (user clicked button), navigate to /feed.
+                   If False (auto-poll), only reload the current page.
+        """
         try:
-            return await self._run_in_pw_thread(self._check_and_finalize_login_sync)
+            return await self._run_in_pw_thread(self._check_and_finalize_login_sync, force)
         except Exception as e:
             logger.info(f"check_and_finalize_login_async error: {e}")
             return False
 
-    def _check_and_finalize_login_sync(self) -> bool:
+    def _is_logged_in_url(self, url: str) -> bool:
+        """Check if a URL indicates a logged-in LinkedIn session."""
+        url = url.lower()
+        return (
+            "linkedin.com" in url
+            and "login" not in url
+            and "authwall" not in url
+            and "checkpoint" not in url
+            and "challenge" not in url
+        )
+
+    def _finalize_login(self) -> bool:
+        """Mark the session as connected and save cookies."""
+        self._linkedin = LinkedInAutomation(self._page)
+        self._browser_ready = True
+        CookieManager.save_cookies(self._context, settings.cookies_file)
+        logger.info("Login confirmed and cookies saved.")
+        return True
+
+    def _check_and_finalize_login_sync(self, force: bool = False) -> bool:
         """Check if user has logged in (e.g. after app-based approval).
         MUST run in the Playwright thread.
 
-        After app-based approval, the checkpoint page doesn't auto-redirect.
-        We navigate directly to the feed to check if the session is now valid.
+        Two modes:
+        - force=False (auto-poll): Reload the checkpoint page. If LinkedIn
+          redirects us to /feed, the approval was received. This avoids
+          navigating away from the checkpoint page which can break the flow.
+        - force=True (user clicked 'I approved it'): More aggressively
+          reload then navigate to /feed to check the session.
         """
         if not self._page:
             return False
@@ -361,31 +389,62 @@ class LinkedInWorker:
         self._checking_login = True
 
         try:
-            # Navigate directly to the feed — after app approval the session
-            # cookies are valid, but the checkpoint page won't redirect on its own.
-            logger.info("check_and_finalize_login: navigating to /feed to check session...")
-            self._page.goto(
-                "https://www.linkedin.com/feed",
-                wait_until="domcontentloaded",
-                timeout=15000,
-            )
-            time.sleep(3)
+            current_url = self._page.url.lower()
+            logger.info(f"check_login(force={force}): current URL = {current_url}")
 
-            # Check the main page URL
-            url = self._page.url.lower()
-            logger.info(f"check_and_finalize_login: current URL = {url}")
-            if ("linkedin.com" in url
-                    and "login" not in url
-                    and "authwall" not in url
-                    and "checkpoint" not in url
-                    and "challenge" not in url):
-                self._linkedin = LinkedInAutomation(self._page)
-                self._browser_ready = True
-                CookieManager.save_cookies(self._context, settings.cookies_file)
-                logger.info("Login confirmed and cookies saved.")
-                return True
-            else:
-                logger.info(f"check_and_finalize_login: NOT logged in, URL still: {url}")
+            # Already on a logged-in page (e.g. checkpoint redirected after approval)
+            if self._is_logged_in_url(current_url):
+                logger.info("Already on logged-in page!")
+                return self._finalize_login()
+
+            # --- On checkpoint / challenge page ---
+            if "checkpoint" in current_url or "challenge" in current_url:
+                # Reload the checkpoint page to see if approval triggers a redirect
+                logger.info("On checkpoint page, reloading...")
+                try:
+                    self._page.reload(wait_until="domcontentloaded", timeout=15000)
+                except Exception as e:
+                    logger.info(f"Checkpoint reload error: {e}")
+                time.sleep(3)
+
+                new_url = self._page.url.lower()
+                logger.info(f"After checkpoint reload: {new_url}")
+
+                if self._is_logged_in_url(new_url):
+                    return self._finalize_login()
+
+                # If force mode (user clicked button), also try navigating to /feed
+                if force:
+                    logger.info("Force mode: navigating to /feed...")
+                    self._page.goto(
+                        "https://www.linkedin.com/feed",
+                        wait_until="domcontentloaded",
+                        timeout=15000,
+                    )
+                    time.sleep(3)
+                    feed_url = self._page.url.lower()
+                    logger.info(f"After /feed navigation: {feed_url}")
+
+                    if self._is_logged_in_url(feed_url):
+                        return self._finalize_login()
+
+                # Not logged in yet
+                return False
+
+            # --- On login / authwall page (checkpoint was lost) ---
+            if force:
+                logger.info("On login/authwall, force-navigating to /feed...")
+                self._page.goto(
+                    "https://www.linkedin.com/feed",
+                    wait_until="domcontentloaded",
+                    timeout=15000,
+                )
+                time.sleep(3)
+                url = self._page.url.lower()
+                logger.info(f"After /feed navigation: {url}")
+
+                if self._is_logged_in_url(url):
+                    return self._finalize_login()
 
             return False
         except Exception as e:
@@ -393,6 +452,20 @@ class LinkedInWorker:
             return False
         finally:
             self._checking_login = False
+
+    def get_debug_info(self) -> dict:
+        """Return current browser state for debugging."""
+        if not self._page:
+            return {"page": None, "url": None, "title": None}
+        try:
+            return {
+                "page": "active",
+                "url": self._page.url,
+                "title": self._page.title(),
+                "browser_ready": self._browser_ready,
+            }
+        except Exception as e:
+            return {"page": "error", "error": str(e)}
 
     def _send_messages(self, task: WorkerTask):
         """Send initial messages to contacts."""
