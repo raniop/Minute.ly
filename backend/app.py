@@ -20,11 +20,54 @@ logger = logging.getLogger("minutely")
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend" / "dist"
 
 
+def _run_migrations():
+    """Add new columns to existing tables (SQLite doesn't auto-add via create_all)."""
+    from sqlalchemy import text, inspect as sa_inspect
+    insp = sa_inspect(engine)
+    if "contacts" in insp.get_table_names():
+        cols = [c["name"] for c in insp.get_columns("contacts")]
+        if "owner_linkedin_id" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "ALTER TABLE contacts ADD COLUMN owner_linkedin_id VARCHAR(100) DEFAULT ''"
+                ))
+            logger.info("Migration: added owner_linkedin_id column to contacts.")
+
+    # One-time: extract company from title for contacts missing company
+    from backend.database import SessionLocal
+    from backend.models.contact import Contact
+    from backend.worker.linkedin_worker import extract_company_from_title
+    db = SessionLocal()
+    try:
+        contacts_without_company = (
+            db.query(Contact)
+            .filter(
+                Contact.title != "",
+                Contact.title.isnot(None),
+                (Contact.company == "") | (Contact.company.is_(None)),
+            )
+            .all()
+        )
+        if contacts_without_company:
+            updated = 0
+            for c in contacts_without_company:
+                company = extract_company_from_title(c.title)
+                if company:
+                    c.company = company
+                    updated += 1
+            db.commit()
+            if updated:
+                logger.info(f"Migration: extracted company for {updated} contacts.")
+    finally:
+        db.close()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown logic."""
     # Create all tables
     Base.metadata.create_all(bind=engine)
+    _run_migrations()
     logger.info("Database tables created.")
 
     # One-time CSV migration

@@ -7,6 +7,7 @@ to guarantee this.
 import asyncio
 import logging
 import random
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -24,6 +25,25 @@ from backend.linkedin.browser import launch_browser, handle_login
 from backend.linkedin.cookies import CookieManager
 
 logger = logging.getLogger("minutely")
+
+
+def extract_company_from_title(title: str) -> str:
+    """Extract company name from LinkedIn title text.
+
+    Common patterns:
+      "Product Manager at Google"
+      "CEO @ Microsoft"
+      "VP - Product Management @ZEE || Times Network"
+      "Founder at Platy.Studio | AI Dubbing"
+    """
+    if not title:
+        return ""
+    # Try "at Company" or "@ Company" pattern
+    match = re.search(r'\b(?:at|@)\s+(.+?)(?:\s*[|·•,]|$)', title, re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    return ""
+
 
 # Single-thread executor ensures ALL Playwright calls happen on the same thread.
 # Playwright's sync API uses greenlets that are bound to the creating thread.
@@ -52,6 +72,11 @@ class LinkedInWorker:
         self._browser_ready = False
         self._loop_task = None
         self._checking_login = False  # simple flag to skip concurrent checks
+        self._current_user_id: Optional[str] = None  # logged-in user's LinkedIn ID
+
+    @property
+    def current_user_id(self) -> Optional[str]:
+        return self._current_user_id
 
     @property
     def is_browser_ready(self) -> bool:
@@ -132,6 +157,7 @@ class LinkedInWorker:
                 break
 
             task.status = "running"
+            task.started_at = __import__('time').time()
             logger.info(f"Processing task {task.task_id} ({task.task_type})...")
 
             try:
@@ -174,7 +200,8 @@ class LinkedInWorker:
                 if linkedin.check_login_status():
                     self._linkedin = linkedin
                     self._browser_ready = True
-                    logger.info("Browser ready (cookie login successful).")
+                    self._current_user_id = linkedin.get_my_profile_id()
+                    logger.info(f"Browser ready (cookie login). User: {self._current_user_id}")
                     return
 
         # Navigate to login page and wait for manual login
@@ -207,7 +234,8 @@ class LinkedInWorker:
                 if linkedin.check_login_status():
                     self._linkedin = linkedin
                     self._browser_ready = True
-                    logger.info("Login via saved cookies successful.")
+                    self._current_user_id = linkedin.get_my_profile_id()
+                    logger.info(f"Login via saved cookies. User: {self._current_user_id}")
                     return {"status": "connected", "message": "Logged in via saved cookies"}
 
         # Navigate to login page
@@ -253,7 +281,8 @@ class LinkedInWorker:
             self._linkedin = LinkedInAutomation(self._page)
             self._browser_ready = True
             CookieManager.save_cookies(self._context, settings.cookies_file)
-            logger.info("Credential login successful. Cookies saved.")
+            self._current_user_id = self._linkedin.get_my_profile_id()
+            logger.info(f"Credential login successful. User: {self._current_user_id}")
             return {"status": "connected", "message": "Successfully logged in to LinkedIn"}
 
         # Unknown state
@@ -365,7 +394,9 @@ class LinkedInWorker:
         self._linkedin = LinkedInAutomation(self._page)
         self._browser_ready = True
         CookieManager.save_cookies(self._context, settings.cookies_file)
-        logger.info("Login confirmed and cookies saved.")
+        # Detect the logged-in user's profile ID
+        self._current_user_id = self._linkedin.get_my_profile_id()
+        logger.info(f"Login confirmed and cookies saved. User: {self._current_user_id}")
         return True
 
     def _check_and_finalize_login_sync(self, force: bool = False) -> bool:
@@ -539,8 +570,31 @@ class LinkedInWorker:
 
     def _scrape_connections(self, task: WorkerTask):
         """Scrape LinkedIn connections and upsert into database."""
+        owner_id = self._current_user_id or ""
+        force = task.payload.get("force", False)
+
+        # Check if contacts are already cached for this user
+        if not force and owner_id:
+            db = SessionLocal()
+            try:
+                cached_count = (
+                    db.query(Contact)
+                    .filter(Contact.owner_linkedin_id == owner_id, Contact.is_connected == True)  # noqa: E712
+                    .count()
+                )
+                if cached_count > 0:
+                    task.status = "completed"
+                    task.progress = cached_count
+                    task.total = cached_count
+                    logger.info(
+                        f"Skipping scrape: {cached_count} cached contacts for user {owner_id}"
+                    )
+                    return
+            finally:
+                db.close()
+
         task.status = "scrolling"
-        print(f"[SCRAPER] Starting scrape, page URL: {self._page.url if self._page else 'no page'}")
+        print(f"[SCRAPER] Starting scrape for user {owner_id}, page URL: {self._page.url if self._page else 'no page'}")
 
         def on_scroll_progress(connections_found: int):
             task.progress = connections_found
@@ -566,12 +620,19 @@ class LinkedInWorker:
                     .first()
                 )
 
+                title_text = conn.get("title", "")
+                company = extract_company_from_title(title_text)
+
                 if existing:
                     # Update existing contact
                     existing.is_connected = True
                     existing.connection_status = "connected"
-                    if conn.get("title") and not existing.title:
-                        existing.title = conn["title"]
+                    if not existing.owner_linkedin_id:
+                        existing.owner_linkedin_id = owner_id
+                    if title_text and not existing.title:
+                        existing.title = title_text
+                    if company and not existing.company:
+                        existing.company = company
                 else:
                     # Create new contact
                     full_name = conn["full_name"]
@@ -580,9 +641,11 @@ class LinkedInWorker:
                         profile_url=url,
                         full_name=full_name,
                         first_name=full_name.split()[0] if full_name else "",
-                        title=conn.get("title", ""),
+                        title=title_text,
+                        company=company,
                         is_connected=True,
                         connection_status="connected",
+                        owner_linkedin_id=owner_id,
                     )
                     db.add(contact)
                     added += 1
@@ -592,7 +655,7 @@ class LinkedInWorker:
             db.commit()
             logger.info(
                 f"Scraping complete: {len(connections)} connections found, "
-                f"{added} new contacts added."
+                f"{added} new contacts added for user {owner_id}."
             )
         finally:
             db.close()
@@ -607,6 +670,7 @@ class LinkedInWorker:
         """Close the Playwright browser and all resources."""
         self._browser_ready = False
         self._linkedin = None
+        self._current_user_id = None
         try:
             if self._browser:
                 self._browser.close()

@@ -57,12 +57,29 @@ export interface JobStatus {
   progress: number
   total: number
   error: string | null
+  elapsed_seconds?: number
+}
+
+export interface ActiveScrape {
+  active: boolean
+  job_id?: string
+  status?: string
+  progress?: number
+  total?: number
+  elapsed_seconds?: number
 }
 
 export interface WorkerStatus {
   worker_status: string
   browser_connected: boolean
+  current_user_id: string | null
   active_job: string | null
+}
+
+export interface ContactsCacheStatus {
+  cached: boolean
+  count: number
+  user_id: string | null
 }
 
 export interface ContactStats {

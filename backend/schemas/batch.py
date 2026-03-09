@@ -59,3 +59,4 @@ class JobStatusOut(BaseModel):
     progress: int = 0
     total: int = 0
     error: Optional[str] = None
+    elapsed_seconds: Optional[int] = None

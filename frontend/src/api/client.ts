@@ -9,6 +9,8 @@ import type {
   ContactStats,
   Contact,
   LoginResponse,
+  ContactsCacheStatus,
+  ActiveScrape,
 } from '../types'
 
 const api = axios.create({
@@ -54,8 +56,14 @@ export const checkLogin = (force: boolean = false) =>
 export const logoutLinkedIn = () =>
   api.post<{ status: string; message: string }>('/linkedin/logout').then(r => r.data)
 
-export const scrapeConnections = () =>
-  api.post<JobStatus>('/linkedin/scrape-connections').then(r => r.data)
+export const getContactsCacheStatus = () =>
+  api.get<ContactsCacheStatus>('/linkedin/contacts-status').then(r => r.data)
+
+export const scrapeConnections = (force: boolean = false) =>
+  api.post<JobStatus>('/linkedin/scrape-connections', { force }).then(r => r.data)
 
 export const getJobStatus = (jobId: string) =>
   api.get<JobStatus>(`/linkedin/job/${jobId}`).then(r => r.data)
+
+export const getActiveScrape = () =>
+  api.get<ActiveScrape>('/linkedin/active-scrape').then(r => r.data)

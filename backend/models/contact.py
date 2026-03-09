@@ -10,6 +10,7 @@ class Contact(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     linkedin_id = Column(String(100), unique=True, nullable=False, index=True)
     profile_url = Column(String(500), nullable=False)
+    owner_linkedin_id = Column(String(100), nullable=True, index=True, default="")
     full_name = Column(String(200), nullable=False)
     first_name = Column(String(100), nullable=False)
     title = Column(String(300), default="")

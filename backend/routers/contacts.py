@@ -1,30 +1,51 @@
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 from typing import Optional
 
 from backend.database import get_db
 from backend.models.contact import Contact
 from backend.schemas.contact import ContactOut, ContactUpdate, ContactStats
+from backend.worker.linkedin_worker import worker
 
 router = APIRouter()
+
+
+def _owner_filter(query, db):
+    """Filter contacts by the currently logged-in LinkedIn user."""
+    user_id = worker.current_user_id
+    if user_id:
+        query = query.filter(Contact.owner_linkedin_id == user_id)
+    return query
 
 
 @router.get("", response_model=list[ContactOut])
 def list_contacts(
     industry: Optional[str] = None,
     tag: Optional[str] = None,
+    search: Optional[str] = None,
     connected_only: bool = False,
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
 ):
     query = db.query(Contact)
+    query = _owner_filter(query, db)
     if industry:
         query = query.filter(Contact.industry == industry)
     if tag:
         query = query.filter(Contact.tags.contains(tag))
     if connected_only:
         query = query.filter(Contact.is_connected == True)  # noqa: E712
+    if search:
+        like = f"%{search}%"
+        query = query.filter(
+            or_(
+                Contact.full_name.ilike(like),
+                Contact.title.ilike(like),
+                Contact.company.ilike(like),
+            )
+        )
 
     total = query.count()
     contacts = query.offset((page - 1) * per_page).limit(per_page).all()
@@ -33,18 +54,18 @@ def list_contacts(
 
 @router.get("/stats", response_model=ContactStats)
 def get_stats(db: Session = Depends(get_db)):
-    total = db.query(Contact).count()
-    connected = db.query(Contact).filter(Contact.is_connected == True).count()  # noqa: E712
-    messaged = db.query(Contact).filter(Contact.last_messaged_at.isnot(None)).count()
-    replied = db.query(Contact).filter(Contact.has_replied == True).count()  # noqa: E712
+    base = db.query(Contact)
+    base = _owner_filter(base, db)
+
+    total = base.count()
+    connected = base.filter(Contact.is_connected == True).count()  # noqa: E712
+    messaged = base.filter(Contact.last_messaged_at.isnot(None)).count()
+    replied = base.filter(Contact.has_replied == True).count()  # noqa: E712
 
     # Industry breakdown
     from sqlalchemy import func
-    industry_rows = (
-        db.query(Contact.industry, func.count(Contact.id))
-        .group_by(Contact.industry)
-        .all()
-    )
+    industry_query = base.with_entities(Contact.industry, func.count(Contact.id)).group_by(Contact.industry)
+    industry_rows = industry_query.all()
     by_industry = {row[0]: row[1] for row in industry_rows}
 
     return ContactStats(
@@ -63,6 +84,32 @@ def get_contact(contact_id: int, db: Session = Depends(get_db)):
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Contact not found")
     return contact
+
+
+@router.post("/extract-companies")
+def extract_companies(db: Session = Depends(get_db)):
+    """One-time: extract company from title for all contacts missing company."""
+    from backend.worker.linkedin_worker import extract_company_from_title
+
+    contacts = (
+        db.query(Contact)
+        .filter(
+            Contact.title != "",
+            Contact.title.isnot(None),
+            (Contact.company == "") | (Contact.company.is_(None)),
+        )
+        .all()
+    )
+
+    updated = 0
+    for contact in contacts:
+        company = extract_company_from_title(contact.title)
+        if company:
+            contact.company = company
+            updated += 1
+
+    db.commit()
+    return {"updated": updated, "total_checked": len(contacts)}
 
 
 @router.put("/{contact_id}", response_model=ContactOut)

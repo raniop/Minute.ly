@@ -16,6 +16,7 @@ from backend.schemas.batch import (
 from backend.schemas.contact import ContactOut
 from backend.services.message_service import build_initial_message, build_followup_message
 from backend.config import settings
+from backend.worker.linkedin_worker import worker
 
 logger = logging.getLogger("minutely")
 
@@ -68,6 +69,9 @@ def get_or_create_today_batch(db: Session) -> TodayBatchOut:
         .subquery()
     )
 
+    owner_id = worker.current_user_id
+    owner_filter = [Contact.owner_linkedin_id == owner_id] if owner_id else []
+
     eligible = (
         db.query(Contact)
         .filter(
@@ -77,6 +81,7 @@ def get_or_create_today_batch(db: Session) -> TodayBatchOut:
                 Contact.last_shown_at < cutoff,
             ),
             ~Contact.id.in_(already_messaged_ids),
+            *owner_filter,
         )
         .order_by(Contact.last_shown_at.asc().nullsfirst())
         .limit(settings.batch_size)
@@ -161,6 +166,9 @@ def refresh_unselected(db: Session, keep_contact_ids: list[int]) -> TodayBatchOu
         .subquery()
     )
 
+    owner_id = worker.current_user_id
+    owner_filter = [Contact.owner_linkedin_id == owner_id] if owner_id else []
+
     new_eligible = (
         db.query(Contact)
         .filter(
@@ -171,6 +179,7 @@ def refresh_unselected(db: Session, keep_contact_ids: list[int]) -> TodayBatchOu
             ),
             ~Contact.id.in_(already_messaged_ids),
             ~Contact.id.in_(existing_ids) if existing_ids else True,
+            *owner_filter,
         )
         .order_by(Contact.last_shown_at.asc().nullsfirst())
         .limit(slots_available)

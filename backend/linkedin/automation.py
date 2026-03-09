@@ -95,6 +95,35 @@ class LinkedInAutomation:
             self.logger.error(f"Login check failed: {e}")
             return False
 
+    # --- Current User Detection ---
+
+    def get_my_profile_id(self) -> Optional[str]:
+        """Get the logged-in user's LinkedIn profile ID.
+
+        Navigates to /in/me/ which redirects to the user's actual profile,
+        then extracts the profile ID from the URL.
+        """
+        try:
+            self.page.goto(
+                "https://www.linkedin.com/in/me/",
+                wait_until="domcontentloaded",
+                timeout=15000,
+            )
+            time.sleep(3)
+            current_url = self.page.url.rstrip("/")
+            # URL will be like https://www.linkedin.com/in/john-doe-12345
+            match = re.search(r"/in/([^/?]+)", current_url)
+            if match:
+                profile_id = match.group(1)
+                if profile_id != "me":
+                    self.logger.info(f"Detected logged-in user: {profile_id}")
+                    return profile_id
+            self.logger.warning(f"Could not extract profile ID from URL: {current_url}")
+            return None
+        except Exception as e:
+            self.logger.error(f"Failed to get profile ID: {e}")
+            return None
+
     # --- Security Challenge Detection ---
 
     def detect_security_challenge(self) -> bool:
@@ -846,47 +875,56 @@ class LinkedInAutomation:
             "https://www.linkedin.com/mynetwork/invite-connect/connections/",
             wait_until="domcontentloaded",
         )
-        time.sleep(4)
+        time.sleep(3)
         print(f"[SCRAPER] Page loaded: {self.page.url}, title: {self.page.title()}")
 
         last_count = 0
         no_change_count = 0
+        load_more_fails = 0  # stop checking "Load more" after repeated misses
 
         for scroll_num in range(max_scrolls):
-            # Scroll to bottom to trigger lazy loading
-            self.page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            time.sleep(2)
+            # Batch-scroll: do 3 fast scrolls before checking count
+            self.page.evaluate("""
+                window.scrollTo(0, document.body.scrollHeight);
+            """)
+            time.sleep(0.5)
 
-            # Try clicking "Load more" button if present
-            try:
-                load_more = self.page.get_by_role("button", name="Load more")
-                if load_more.is_visible(timeout=1000):
-                    load_more.click()
-                    time.sleep(2)
-            except Exception:
-                pass
+            # Only check "Load more" every 5 scrolls and if it was found before
+            if load_more_fails < 3 and scroll_num % 5 == 4:
+                try:
+                    load_more = self.page.get_by_role("button", name="Load more")
+                    if load_more.is_visible(timeout=500):
+                        load_more.click()
+                        time.sleep(1)
+                        load_more_fails = 0
+                    else:
+                        load_more_fails += 1
+                except Exception:
+                    load_more_fails += 1
 
-            current_count = self.page.evaluate(
-                """document.querySelectorAll('a[href*="/in/"]').length"""
-            )
+            # Only count every 3 scrolls to reduce overhead
+            if scroll_num % 3 == 2:
+                current_count = self.page.evaluate(
+                    """document.querySelectorAll('a[href*="/in/"]').length"""
+                )
 
-            approx_connections = current_count // 3
+                approx_connections = current_count // 3
 
-            if current_count == last_count:
-                no_change_count += 1
-                if no_change_count >= 5:
-                    break
-            else:
-                no_change_count = 0
-                last_count = current_count
+                if current_count == last_count:
+                    no_change_count += 1
+                    if no_change_count >= 5:
+                        break
+                else:
+                    no_change_count = 0
+                    last_count = current_count
 
-            # Report progress during scrolling
-            if progress_callback:
-                progress_callback(approx_connections)
+                # Report progress during scrolling
+                if progress_callback:
+                    progress_callback(approx_connections)
 
-            self.logger.info(
-                f"Scroll {scroll_num + 1}: ~{approx_connections} connections loaded"
-            )
+                self.logger.info(
+                    f"Scroll {scroll_num + 1}: ~{approx_connections} connections loaded"
+                )
 
         # Extract connection data using JavaScript
         connections = self.page.evaluate("""() => {

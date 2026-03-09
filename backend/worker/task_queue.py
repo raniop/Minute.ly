@@ -2,6 +2,7 @@
 In-process async task queue for managing Playwright background jobs.
 No external dependencies (no Celery/Redis) - uses asyncio.Queue.
 """
+import time
 import uuid
 import logging
 from dataclasses import dataclass, field
@@ -27,15 +28,19 @@ class WorkerTask:
     progress: int = 0
     total: int = 0
     error: Optional[str] = None
+    started_at: Optional[float] = None  # time.time() when task started running
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "job_id": self.task_id,
             "status": self.status,
             "progress": self.progress,
             "total": self.total,
             "error": self.error,
         }
+        if self.started_at:
+            d["elapsed_seconds"] = round(time.time() - self.started_at)
+        return d
 
 
 class TaskRegistry:
@@ -50,6 +55,27 @@ class TaskRegistry:
 
     def get(self, task_id: str) -> Optional[WorkerTask]:
         return self._tasks.get(task_id)
+
+    def get_active_scrape(self) -> Optional[WorkerTask]:
+        """Find the most recent active or recently completed scrape task."""
+        scrape_tasks = [
+            t for t in self._tasks.values()
+            if t.task_type == TaskType.SCRAPE_CONNECTIONS
+        ]
+        # Prefer running/queued tasks
+        active = [t for t in scrape_tasks if t.status in ("queued", "running")]
+        if active:
+            return active[-1]
+        # Fall back to most recently completed (within last 10 seconds)
+        completed = [
+            t for t in scrape_tasks
+            if t.status in ("completed", "failed")
+            and t.started_at
+            and (time.time() - t.started_at) < 300
+        ]
+        if completed:
+            return completed[-1]
+        return None
 
     def cleanup_old(self, max_completed: int = 50):
         """Remove old completed tasks to prevent memory leak."""
