@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from backend.database import get_db
+from backend.models.message import Message
 from backend.schemas.batch import (
     TodayBatchOut,
     SendRequest,
@@ -44,3 +45,27 @@ def get_followups(db: Session = Depends(get_db)):
 @router.post("/followups/send", response_model=JobStatusOut)
 async def send_followups(req: FollowUpSendRequest, db: Session = Depends(get_db)):
     return await queue_followup_messages(db, req.items)
+
+
+@router.get("/messages/recent")
+def get_recent_messages(db: Session = Depends(get_db)):
+    """Diagnostic: show recent messages and their statuses."""
+    messages = (
+        db.query(Message)
+        .order_by(Message.id.desc())
+        .limit(20)
+        .all()
+    )
+    return [
+        {
+            "id": m.id,
+            "contact_id": m.contact_id,
+            "contact_name": m.contact.full_name if m.contact else "?",
+            "type": m.message_type,
+            "status": m.status,
+            "error": m.error_message,
+            "sent_at": m.sent_at.isoformat() if m.sent_at else None,
+            "created_at": m.created_at.isoformat() if m.created_at else None,
+        }
+        for m in messages
+    ]

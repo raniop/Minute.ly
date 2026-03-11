@@ -25,6 +25,15 @@ class LinkedInAutomation:
         self.page = page
         self.logger = logging.getLogger("minutely")
 
+    def _screenshot_debug(self, label: str) -> None:
+        """Take a debug screenshot and save to /tmp for diagnostics."""
+        try:
+            path = f"/tmp/linkedin_debug_{label}_{int(time.time())}.png"
+            self.page.screenshot(path=path)
+            self.logger.info(f"Debug screenshot saved: {path}")
+        except Exception as e:
+            self.logger.debug(f"Screenshot failed: {e}")
+
     # --- Navigation ---
 
     def navigate_to_profile(self, url: str) -> bool:
@@ -610,6 +619,7 @@ class LinkedInAutomation:
 
         if msg_btn is None:
             self.logger.error("Message button not found. May not be connected.")
+            self._screenshot_debug("no_msg_button")
             return False
 
         try:
@@ -671,6 +681,7 @@ class LinkedInAutomation:
 
         if message_box is None:
             self.logger.error("Could not find message input box.")
+            self._screenshot_debug("no_msg_box")
             self._close_message_overlay()
             return False
 
@@ -779,6 +790,7 @@ class LinkedInAutomation:
 
         except Exception as e:
             self.logger.error(f"Failed to click Send on message: {e}")
+            self._screenshot_debug("send_failed")
             self._close_message_overlay()
             return False
 

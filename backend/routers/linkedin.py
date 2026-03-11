@@ -1,4 +1,9 @@
+import base64
+import glob as glob_mod
+import os
+
 from fastapi import APIRouter, Depends
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from backend.database import get_db
@@ -93,6 +98,47 @@ def get_contacts_status(db: Session = Depends(get_db)):
         .count()
     )
     return {"cached": count > 0, "count": count, "user_id": user_id}
+
+
+@router.post("/take-screenshot")
+async def take_screenshot():
+    """Take a screenshot of the current browser page (runs in PW thread)."""
+    try:
+        import time as time_mod
+        path = f"/tmp/linkedin_debug_manual_{int(time_mod.time())}.png"
+
+        def _do_screenshot():
+            if worker._page:
+                worker._page.screenshot(path=path)
+                return True
+            return False
+
+        ok = await worker._run_in_pw_thread(_do_screenshot)
+        if not ok:
+            return {"error": "No browser page available"}
+        with open(path, "rb") as f:
+            data = base64.b64encode(f.read()).decode()
+        return {"file": path, "data": f"data:image/png;base64,{data}"}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@router.get("/screenshots")
+def get_debug_screenshots():
+    """Return list of recent debug screenshots."""
+    files = sorted(glob_mod.glob("/tmp/linkedin_debug_*.png"), key=os.path.getmtime, reverse=True)
+    return [{"file": f, "time": os.path.getmtime(f)} for f in files[:10]]
+
+
+@router.get("/screenshot-latest")
+def get_latest_screenshot():
+    """Return the most recent debug screenshot as base64."""
+    files = sorted(glob_mod.glob("/tmp/linkedin_debug_*.png"), key=os.path.getmtime, reverse=True)
+    if not files:
+        return {"error": "No screenshots found"}
+    with open(files[0], "rb") as f:
+        data = base64.b64encode(f.read()).decode()
+    return {"file": files[0], "data": f"data:image/png;base64,{data}"}
 
 
 @router.get("/active-scrape")

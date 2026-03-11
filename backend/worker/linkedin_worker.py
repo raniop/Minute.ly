@@ -505,20 +505,26 @@ class LinkedInWorker:
 
         db = SessionLocal()
         try:
-            for msg_id in message_ids:
+            for idx, msg_id in enumerate(message_ids):
                 message = db.query(Message).filter(Message.id == msg_id).first()
                 if not message:
                     task.progress += 1
                     continue
 
                 contact = message.contact
+                logger.info(
+                    f"[MSG {idx+1}/{len(message_ids)}] Starting: {contact.full_name} "
+                    f"(contact_id={contact.id}, profile={contact.profile_url})"
+                )
                 message.status = "sending"
                 db.commit()
 
                 # Navigate to profile
+                logger.info(f"[MSG {idx+1}] Navigating to profile...")
                 if not self._linkedin.navigate_to_profile(contact.profile_url):
                     message.status = "failed"
                     message.error_message = "Failed to navigate to profile"
+                    logger.error(f"[MSG {idx+1}] Navigation failed for {contact.full_name}")
                     db.commit()
                     task.progress += 1
                     continue
@@ -538,21 +544,31 @@ class LinkedInWorker:
                 video_path = None
                 if message.attach_video and settings.demo_video_file.exists():
                     video_path = settings.demo_video_file
+                    logger.info(f"[MSG {idx+1}] Will attach video: {video_path}")
 
                 # Send message
-                success = self._linkedin.send_message(
-                    message.content, video_path=video_path
-                )
+                logger.info(f"[MSG {idx+1}] Calling send_message ({len(message.content)} chars)...")
+                try:
+                    success = self._linkedin.send_message(
+                        message.content, video_path=video_path
+                    )
+                except Exception as e:
+                    logger.error(f"[MSG {idx+1}] send_message EXCEPTION: {e}")
+                    message.status = "failed"
+                    message.error_message = f"Exception: {str(e)[:200]}"
+                    db.commit()
+                    task.progress += 1
+                    continue
 
                 if success:
                     message.status = "sent"
                     message.sent_at = datetime.utcnow()
                     contact.last_messaged_at = datetime.utcnow()
-                    logger.info(f"Message sent to {contact.full_name}")
+                    logger.info(f"[MSG {idx+1}] SUCCESS: Message sent to {contact.full_name}")
                 else:
                     message.status = "failed"
                     message.error_message = "send_message returned False"
-                    logger.error(f"Failed to send message to {contact.full_name}")
+                    logger.error(f"[MSG {idx+1}] FAILED: send_message returned False for {contact.full_name}")
 
                 db.commit()
                 task.progress += 1

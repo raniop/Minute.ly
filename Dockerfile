@@ -31,13 +31,14 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Install Playwright Chromium browser
 RUN playwright install chromium
 
-# Copy backend, frontend dist, and entry point
+# Copy backend, frontend dist, assets, and entry point
 COPY backend/ ./backend/
 COPY frontend/dist/ ./frontend/dist/
+COPY assets/ ./assets/
 COPY run.py .
 
-# Create directories for cookies, logs, assets
-RUN mkdir -p cookies logs assets
+# Create directories for cookies, logs
+RUN mkdir -p cookies logs
 
 # Expose port
 EXPOSE 8000
