@@ -65,6 +65,12 @@ def _run_migrations():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown logic."""
+    # Ensure persistent data directories exist
+    settings.data_dir.mkdir(parents=True, exist_ok=True)
+    (settings.data_dir / "cookies").mkdir(exist_ok=True)
+    (settings.data_dir / "logs").mkdir(exist_ok=True)
+    logger.info(f"Data directory: {settings.data_dir}")
+
     # Create all tables
     Base.metadata.create_all(bind=engine)
     _run_migrations()

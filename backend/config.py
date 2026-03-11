@@ -11,10 +11,15 @@ class Settings:
 
     # --- Paths ---
     base_dir: Path = Path(__file__).resolve().parent.parent
-    database_url: str = os.getenv("DATABASE_URL", f"sqlite:///{base_dir / 'minutely.db'}")
-    cookies_file: Path = base_dir / "cookies" / "linkedin_cookies.json"
+    # DATA_DIR env var: mount a Railway volume here for persistent storage
+    data_dir: Path = Path(os.getenv("DATA_DIR", str(base_dir)))
+    database_url: str = os.getenv(
+        "DATABASE_URL",
+        "sqlite:///" + str(Path(os.getenv("DATA_DIR", str(base_dir))) / "minutely.db"),
+    )
+    cookies_file: Path = Path(os.getenv("DATA_DIR", str(base_dir))) / "cookies" / "linkedin_cookies.json"
     demo_video_file: Path = base_dir / "assets" / "minutely.mp4"
-    logs_dir: Path = base_dir / "logs"
+    logs_dir: Path = Path(os.getenv("DATA_DIR", str(base_dir))) / "logs"
     leads_csv: Path = base_dir / "leads.csv"
 
     # --- API Keys ---
