@@ -141,6 +141,17 @@ def get_latest_screenshot():
     return {"file": files[0], "data": f"data:image/png;base64,{data}"}
 
 
+@router.get("/debug-screenshot")
+def get_debug_screenshot():
+    """Return the debug screenshot from the last scrape attempt."""
+    from fastapi.responses import FileResponse
+    data_dir = os.environ.get("DATA_DIR", ".")
+    path = os.path.join(data_dir, "debug_connections_page.png")
+    if os.path.exists(path):
+        return FileResponse(path, media_type="image/png")
+    return JSONResponse({"error": "No debug screenshot found"}, status_code=404)
+
+
 @router.get("/active-scrape")
 def get_active_scrape():
     """Check if there's a currently running or recently completed scrape job."""

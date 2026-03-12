@@ -887,8 +887,42 @@ class LinkedInAutomation:
             "https://www.linkedin.com/mynetwork/invite-connect/connections/",
             wait_until="domcontentloaded",
         )
-        time.sleep(3)
+        time.sleep(5)
         print(f"[SCRAPER] Page loaded: {self.page.url}, title: {self.page.title()}")
+
+        # Debug: dump page structure to understand what LinkedIn renders
+        debug_info = self.page.evaluate("""() => {
+            const allLinks = document.querySelectorAll('a[href*="/in/"]');
+            const bodyText = document.body.innerText.substring(0, 500);
+            const allAnchors = document.querySelectorAll('a');
+            const sampleHrefs = Array.from(allAnchors).slice(0, 20).map(a => a.href);
+            return {
+                inLinks: allLinks.length,
+                totalAnchors: allAnchors.length,
+                bodySnippet: bodyText,
+                sampleHrefs: sampleHrefs,
+                scrollHeight: document.body.scrollHeight
+            };
+        }""")
+        print(f"[SCRAPER] Debug - /in/ links: {debug_info['inLinks']}, total anchors: {debug_info['totalAnchors']}, scrollHeight: {debug_info['scrollHeight']}")
+        print(f"[SCRAPER] Debug - body snippet: {debug_info['bodySnippet'][:300]}")
+        print(f"[SCRAPER] Debug - sample hrefs: {debug_info['sampleHrefs'][:10]}")
+
+        # Save debug screenshot
+        try:
+            import os
+            data_dir = os.environ.get("DATA_DIR", ".")
+            self.page.screenshot(path=f"{data_dir}/debug_connections_page.png")
+            print(f"[SCRAPER] Debug screenshot saved to {data_dir}/debug_connections_page.png")
+        except Exception as e:
+            print(f"[SCRAPER] Debug screenshot failed: {e}")
+
+        # Wait for connection cards to appear (LinkedIn lazy-loads them)
+        try:
+            self.page.wait_for_selector('a[href*="/in/"]', timeout=15000)
+            print(f"[SCRAPER] Connection links appeared on page")
+        except Exception:
+            print(f"[SCRAPER] WARNING: No /in/ links found after 15s wait - page may not have loaded connections")
 
         last_count = 0
         no_change_count = 0
@@ -925,6 +959,7 @@ class LinkedInAutomation:
                 if current_count == last_count:
                     no_change_count += 1
                     if no_change_count >= 5:
+                        print(f"[SCRAPER] No new connections after {no_change_count} checks, stopping scroll. Total /in/ links: {current_count}")
                         break
                 else:
                     no_change_count = 0
@@ -934,9 +969,8 @@ class LinkedInAutomation:
                 if progress_callback:
                     progress_callback(approx_connections)
 
-                self.logger.info(
-                    f"Scroll {scroll_num + 1}: ~{approx_connections} connections loaded"
-                )
+                # Log every check so we can see progress
+                print(f"[SCRAPER] Scroll {scroll_num + 1}: {current_count} /in/ links (~{approx_connections} connections), no_change={no_change_count}")
 
         # Extract connection data using JavaScript
         connections = self.page.evaluate("""() => {
