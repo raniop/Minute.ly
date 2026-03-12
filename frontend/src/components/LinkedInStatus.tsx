@@ -9,6 +9,7 @@ export default function LinkedInStatus({ onStatusChange }: Props) {
   const [loading, setLoading] = useState(false)
   const [status, setStatus] = useState<'disconnected' | 'connecting' | 'verification' | 'connected'>('disconnected')
   const [message, setMessage] = useState('')
+  const [userId, setUserId] = useState<string | null>(null)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [verifyCode, setVerifyCode] = useState('')
@@ -25,6 +26,7 @@ export default function LinkedInStatus({ onStatusChange }: Props) {
           setStatus('connected')
           setMessage('')
         }
+        if (ws.current_user_id) setUserId(ws.current_user_id)
         onStatusChange?.(isConnected)
       } catch {
         // ignore
@@ -75,6 +77,7 @@ export default function LinkedInStatus({ onStatusChange }: Props) {
     setStatus('connecting')
     try {
       const result = await loginLinkedIn(email, password)
+      if (result.current_user_id) setUserId(result.current_user_id)
       if (result.status === 'connected') {
         setStatus('connected')
         onStatusChange?.(true)
@@ -155,6 +158,7 @@ export default function LinkedInStatus({ onStatusChange }: Props) {
         <div className="flex items-center gap-3">
           <div className="w-3 h-3 bg-green-500 rounded-full" />
           <span className="text-green-800 font-medium">Connected to LinkedIn</span>
+          {userId && <span className="text-green-600 text-sm">({userId})</span>}
         </div>
         <button
           onClick={handleDisconnect}

@@ -120,10 +120,10 @@ def get_templates(
 
 
 async def queue_initial_messages(
-    db: Session, items: list[SendItem]
+    db: Session, items: list[SendItem], user_id: str = ""
 ) -> JobStatusOut:
     """Create message rows and queue them for sending via the worker."""
-    from backend.worker.linkedin_worker import worker
+    from backend.worker.worker_pool import worker_pool
     from backend.worker.task_queue import WorkerTask, TaskType
 
     message_ids = []
@@ -138,31 +138,31 @@ async def queue_initial_messages(
             content=item.message,
             attach_video=item.attach_video,
             status="queued",
+            owner_linkedin_id=user_id,
         )
         db.add(message)
         db.flush()
         message_ids.append(message.id)
 
     db.commit()
-    logger.info(f"Queued {len(message_ids)} initial messages.")
+    logger.info(f"Queued {len(message_ids)} initial messages for user {user_id}.")
 
-    # Create and enqueue worker task
     task = WorkerTask(
         task_type=TaskType.SEND_MESSAGES,
-        payload={"message_ids": message_ids},
+        payload={"message_ids": message_ids, "user_id": user_id},
     )
     task.total = len(message_ids)
 
-    await worker.enqueue(task)
+    await worker_pool.enqueue(task)
 
     return JobStatusOut(**task.to_dict())
 
 
 async def queue_followup_messages(
-    db: Session, items: list[FollowUpSendItem]
+    db: Session, items: list[FollowUpSendItem], user_id: str = ""
 ) -> JobStatusOut:
     """Create follow-up message rows and queue them for sending."""
-    from backend.worker.linkedin_worker import worker
+    from backend.worker.worker_pool import worker_pool
     from backend.worker.task_queue import WorkerTask, TaskType
 
     message_ids = []
@@ -180,20 +180,21 @@ async def queue_followup_messages(
             content=item.message,
             attach_video=False,
             status="queued",
+            owner_linkedin_id=user_id,
         )
         db.add(message)
         db.flush()
         message_ids.append(message.id)
 
     db.commit()
-    logger.info(f"Queued {len(message_ids)} follow-up messages.")
+    logger.info(f"Queued {len(message_ids)} follow-up messages for user {user_id}.")
 
     task = WorkerTask(
         task_type=TaskType.SEND_FOLLOWUPS,
-        payload={"message_ids": message_ids},
+        payload={"message_ids": message_ids, "user_id": user_id},
     )
     task.total = len(message_ids)
 
-    await worker.enqueue(task)
+    await worker_pool.enqueue(task)
 
     return JobStatusOut(**task.to_dict())

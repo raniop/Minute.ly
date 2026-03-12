@@ -16,6 +16,8 @@ class Message(Base):
     status = Column(String(20), default="draft")  # draft/queued/sending/sent/failed
     error_message = Column(Text, nullable=True)
 
+    owner_linkedin_id = Column(String(100), nullable=True, default="", index=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
     sent_at = Column(DateTime, nullable=True)
 

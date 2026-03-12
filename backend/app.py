@@ -12,7 +12,7 @@ from backend.database import engine, Base
 from backend.models import Contact, Message, DailyBatch, DailyBatchContact  # noqa: F401
 from backend.services.migrate_csv import migrate_leads_csv
 from backend.config import settings
-from backend.worker.linkedin_worker import worker
+from backend.worker.worker_pool import worker_pool
 
 logger = logging.getLogger("minutely")
 
@@ -32,6 +32,24 @@ def _run_migrations():
                     "ALTER TABLE contacts ADD COLUMN owner_linkedin_id VARCHAR(100) DEFAULT ''"
                 ))
             logger.info("Migration: added owner_linkedin_id column to contacts.")
+
+    if "messages" in insp.get_table_names():
+        cols = [c["name"] for c in insp.get_columns("messages")]
+        if "owner_linkedin_id" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "ALTER TABLE messages ADD COLUMN owner_linkedin_id VARCHAR(100) DEFAULT ''"
+                ))
+            logger.info("Migration: added owner_linkedin_id column to messages.")
+
+    if "daily_batches" in insp.get_table_names():
+        cols = [c["name"] for c in insp.get_columns("daily_batches")]
+        if "user_id" not in cols:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "ALTER TABLE daily_batches ADD COLUMN user_id VARCHAR(100) DEFAULT ''"
+                ))
+            logger.info("Migration: added user_id column to daily_batches.")
 
     # One-time: extract company from title for contacts missing company
     from backend.database import SessionLocal
@@ -79,13 +97,13 @@ async def lifespan(app: FastAPI):
     # One-time CSV migration
     migrate_leads_csv(settings.leads_csv)
 
-    # Start the background worker
-    await worker.start()
+    # Start the worker pool
+    await worker_pool.start()
 
     yield
 
     # Shutdown
-    await worker.stop()
+    await worker_pool.stop()
     logger.info("Shutting down.")
 
 

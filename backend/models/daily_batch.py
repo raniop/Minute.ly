@@ -8,8 +8,9 @@ class DailyBatch(Base):
     __tablename__ = "daily_batches"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    batch_date = Column(Date, unique=True, nullable=False, index=True)
+    batch_date = Column(Date, nullable=False, index=True)
     batch_type = Column(String(20), default="initial")  # "initial" or "followup"
+    user_id = Column(String(100), nullable=True, default="", index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     entries = relationship(

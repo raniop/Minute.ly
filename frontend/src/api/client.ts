@@ -15,6 +15,7 @@ import type {
 
 const api = axios.create({
   baseURL: '/api',
+  withCredentials: true,
 })
 
 // Batches

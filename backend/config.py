@@ -17,13 +17,23 @@ class Settings:
         "DATABASE_URL",
         "sqlite:///" + str(Path(os.getenv("DATA_DIR", str(base_dir))) / "minutely.db"),
     )
-    cookies_file: Path = Path(os.getenv("DATA_DIR", str(base_dir))) / "cookies" / "linkedin_cookies.json"
+    cookies_dir: Path = Path(os.getenv("DATA_DIR", str(base_dir))) / "cookies"
+    # Legacy single-user cookies path (kept for migration)
+    cookies_file: Path = cookies_dir / "linkedin_cookies.json"
     demo_video_file: Path = base_dir / "assets" / "minutely.mp4"
     logs_dir: Path = Path(os.getenv("DATA_DIR", str(base_dir))) / "logs"
     leads_csv: Path = base_dir / "leads.csv"
 
+    # --- Worker Pool ---
+    max_concurrent_browsers: int = int(os.getenv("MAX_BROWSERS", "3"))
+    session_idle_timeout: int = int(os.getenv("SESSION_IDLE_TIMEOUT", "600"))
+
     # --- API Keys ---
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
+
+    def cookies_file_for(self, user_id: str) -> Path:
+        """Get the cookie file path for a specific user."""
+        return self.cookies_dir / f"{user_id}.json"
 
     # --- Batch Settings ---
     batch_size: int = int(os.getenv("BATCH_SIZE", "10"))

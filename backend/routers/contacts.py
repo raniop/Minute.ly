@@ -6,14 +6,13 @@ from typing import Optional
 from backend.database import get_db
 from backend.models.contact import Contact
 from backend.schemas.contact import ContactOut, ContactUpdate, ContactStats
-from backend.worker.linkedin_worker import worker
+from backend.auth import get_optional_user_id
 
 router = APIRouter()
 
 
-def _owner_filter(query, db):
-    """Filter contacts by the currently logged-in LinkedIn user."""
-    user_id = worker.current_user_id
+def _owner_filter(query, user_id: Optional[str]):
+    """Filter contacts by user's LinkedIn ID."""
     if user_id:
         query = query.filter(Contact.owner_linkedin_id == user_id)
     return query
@@ -28,9 +27,10 @@ def list_contacts(
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
+    user_id: str | None = Depends(get_optional_user_id),
 ):
     query = db.query(Contact)
-    query = _owner_filter(query, db)
+    query = _owner_filter(query, user_id)
     if industry:
         query = query.filter(Contact.industry == industry)
     if tag:
@@ -53,9 +53,9 @@ def list_contacts(
 
 
 @router.get("/stats", response_model=ContactStats)
-def get_stats(db: Session = Depends(get_db)):
+def get_stats(db: Session = Depends(get_db), user_id: str | None = Depends(get_optional_user_id)):
     base = db.query(Contact)
-    base = _owner_filter(base, db)
+    base = _owner_filter(base, user_id)
 
     total = base.count()
     connected = base.filter(Contact.is_connected == True).count()  # noqa: E712

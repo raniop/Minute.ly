@@ -42,6 +42,10 @@ class WorkerTask:
             d["elapsed_seconds"] = round(time.time() - self.started_at)
         return d
 
+    @property
+    def user_id(self) -> str:
+        return self.payload.get("user_id", "")
+
 
 class TaskRegistry:
     """Thread-safe registry for tracking active and completed tasks."""

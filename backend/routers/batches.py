@@ -17,34 +17,35 @@ from backend.services.batch_service import (
     get_followup_contacts,
 )
 from backend.services.message_service import queue_initial_messages, queue_followup_messages
+from backend.auth import get_user_id, get_optional_user_id
 
 router = APIRouter()
 
 
 @router.get("/today", response_model=TodayBatchOut)
-def get_today_batch(db: Session = Depends(get_db)):
-    return get_or_create_today_batch(db)
+def get_today_batch(db: Session = Depends(get_db), user_id: str | None = Depends(get_optional_user_id)):
+    return get_or_create_today_batch(db, user_id=user_id or "")
 
 
 @router.post("/today/refresh", response_model=TodayBatchOut)
-def refresh_today_batch(req: RefreshRequest, db: Session = Depends(get_db)):
+def refresh_today_batch(req: RefreshRequest, db: Session = Depends(get_db), user_id: str | None = Depends(get_optional_user_id)):
     """Replace unselected contacts with new ones. Keeps selected contacts."""
-    return refresh_unselected(db, req.keep_contact_ids)
+    return refresh_unselected(db, req.keep_contact_ids, user_id=user_id or "")
 
 
 @router.post("/today/send", response_model=JobStatusOut)
-async def send_today_messages(req: SendRequest, db: Session = Depends(get_db)):
-    return await queue_initial_messages(db, req.items)
+async def send_today_messages(req: SendRequest, db: Session = Depends(get_db), user_id: str = Depends(get_user_id)):
+    return await queue_initial_messages(db, req.items, user_id=user_id)
 
 
 @router.get("/followups", response_model=FollowUpBatchOut)
-def get_followups(db: Session = Depends(get_db)):
-    return get_followup_contacts(db)
+def get_followups(db: Session = Depends(get_db), user_id: str | None = Depends(get_optional_user_id)):
+    return get_followup_contacts(db, user_id=user_id or "")
 
 
 @router.post("/followups/send", response_model=JobStatusOut)
-async def send_followups(req: FollowUpSendRequest, db: Session = Depends(get_db)):
-    return await queue_followup_messages(db, req.items)
+async def send_followups(req: FollowUpSendRequest, db: Session = Depends(get_db), user_id: str = Depends(get_user_id)):
+    return await queue_followup_messages(db, req.items, user_id=user_id)
 
 
 @router.get("/messages/recent")

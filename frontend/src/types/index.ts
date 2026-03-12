@@ -93,4 +93,5 @@ export interface ContactStats {
 export interface LoginResponse {
   status: string
   message: string
+  current_user_id?: string
 }

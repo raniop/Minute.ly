@@ -1,16 +1,21 @@
 import base64
 import glob as glob_mod
 import os
+import uuid
 
-from fastapi import APIRouter, Depends
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, Response
+from fastapi.responses import JSONResponse, FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from backend.database import get_db
 from backend.models.contact import Contact
 from backend.schemas.batch import JobStatusOut
-from backend.worker.linkedin_worker import worker
+from backend.worker.worker_pool import worker_pool
 from backend.worker.task_queue import WorkerTask, TaskType, task_registry
+from backend.auth import (
+    get_user_id, get_optional_user_id, session_store,
+    set_session_cookie, clear_session_cookie,
+)
 
 router = APIRouter()
 
@@ -33,62 +38,87 @@ class ScrapeRequest(BaseModel):
 
 
 @router.get("/status")
-def get_worker_status():
-    """Check LinkedIn worker and browser status."""
-    return {
-        "worker_status": worker.status,
-        "browser_connected": worker.is_browser_ready,
-        "current_user_id": worker.current_user_id,
-        "active_job": None,
-    }
+def get_worker_status(user_id: str | None = Depends(get_optional_user_id)):
+    """Check LinkedIn worker and browser status for the current user."""
+    if not user_id:
+        return {
+            "worker_status": "no_browser",
+            "browser_connected": False,
+            "current_user_id": None,
+            "active_job": None,
+        }
+    return worker_pool.get_session_status(user_id)
 
 
 @router.get("/debug")
-def get_debug_info():
+def get_debug_info(user_id: str = Depends(get_user_id)):
     """Return current browser page state for debugging."""
-    return worker.get_debug_info()
+    session = worker_pool.get_session(user_id)
+    if not session:
+        return {"page": None, "url": None, "title": None}
+    return session.get_debug_info()
 
 
 @router.post("/login")
-async def credential_login(req: LoginRequest):
+async def credential_login(req: LoginRequest, response: Response):
     """Login to LinkedIn with email and password."""
-    result = await worker.credential_login(req.email, req.password)
+    # Use a temp ID until we know the real LinkedIn ID
+    temp_id = f"login-{uuid.uuid4().hex[:8]}"
+    result = await worker_pool.login_user(temp_id, req.email, req.password)
+
+    actual_user_id = result.get("user_id", temp_id)
+
+    if result.get("status") in ("connected", "verification_needed"):
+        # Create session and set cookie
+        token = session_store.create(actual_user_id)
+        set_session_cookie(response, token)
+        result["current_user_id"] = actual_user_id
+
     return result
 
 
 @router.post("/verify")
-async def submit_verification(req: VerifyRequest):
+async def submit_verification(req: VerifyRequest, response: Response, user_id: str = Depends(get_user_id)):
     """Submit a verification code for LinkedIn 2FA."""
-    result = await worker.submit_verification(req.code)
+    result = await worker_pool.verify_user(user_id, req.code)
+
+    actual_user_id = result.get("user_id", user_id)
+    if result.get("status") == "connected" and actual_user_id != user_id:
+        token = session_store.create(actual_user_id)
+        set_session_cookie(response, token)
+
+    result["current_user_id"] = actual_user_id
     return result
 
 
 @router.post("/check-login")
-async def check_login(req: CheckLoginRequest = CheckLoginRequest()):
-    """Check if manual login has been completed (runs in PW thread).
+async def check_login(req: CheckLoginRequest = CheckLoginRequest(), response: Response = None, user_id: str = Depends(get_user_id)):
+    """Check if manual login has been completed."""
+    result = await worker_pool.check_login(user_id, force=req.force)
 
-    Pass force=true when user explicitly clicks the check button.
-    Auto-polls should use force=false (default) to avoid navigating
-    away from the checkpoint page.
-    """
-    success = await worker.check_and_finalize_login_async(force=req.force)
+    actual_user_id = result.get("user_id", user_id)
+    if result.get("logged_in") and actual_user_id != user_id:
+        token = session_store.create(actual_user_id)
+        set_session_cookie(response, token)
+
     return {
-        "logged_in": success,
-        "browser_connected": worker.is_browser_ready,
+        "logged_in": result.get("logged_in", False),
+        "browser_connected": result.get("browser_connected", False),
     }
 
 
 @router.post("/logout")
-async def logout():
-    """Disconnect from LinkedIn: close browser and clear cookies."""
-    result = await worker.logout()
+async def logout(response: Response, user_id: str = Depends(get_user_id)):
+    """Disconnect from LinkedIn."""
+    result = await worker_pool.logout_user(user_id)
+    session_store.remove_by_user(user_id)
+    clear_session_cookie(response)
     return result
 
 
 @router.get("/contacts-status")
-def get_contacts_status(db: Session = Depends(get_db)):
-    """Check if contacts are already cached for the current logged-in user."""
-    user_id = worker.current_user_id
+def get_contacts_status(db: Session = Depends(get_db), user_id: str | None = Depends(get_optional_user_id)):
+    """Check if contacts are already cached for the current user."""
     if not user_id:
         return {"cached": False, "count": 0, "user_id": None}
 
@@ -101,21 +131,21 @@ def get_contacts_status(db: Session = Depends(get_db)):
 
 
 @router.post("/take-screenshot")
-async def take_screenshot():
-    """Take a screenshot of the current browser page (runs in PW thread)."""
+async def take_screenshot(user_id: str = Depends(get_user_id)):
+    """Take a screenshot of the current browser page."""
+    import asyncio
+    session = worker_pool.get_session(user_id)
+    if not session or not session._page:
+        return {"error": "No browser page available"}
+
     try:
         import time as time_mod
         path = f"/tmp/linkedin_debug_manual_{int(time_mod.time())}.png"
-
-        def _do_screenshot():
-            if worker._page:
-                worker._page.screenshot(path=path)
-                return True
-            return False
-
-        ok = await worker._run_in_pw_thread(_do_screenshot)
-        if not ok:
-            return {"error": "No browser page available"}
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(
+            session._executor,
+            lambda: session._page.screenshot(path=path)
+        )
         with open(path, "rb") as f:
             data = base64.b64encode(f.read()).decode()
         return {"file": path, "data": f"data:image/png;base64,{data}"}
@@ -144,7 +174,6 @@ def get_latest_screenshot():
 @router.get("/debug-screenshot")
 def get_debug_screenshot():
     """Return the debug screenshot from the last scrape attempt."""
-    from fastapi.responses import FileResponse
     data_dir = os.environ.get("DATA_DIR", ".")
     path = os.path.join(data_dir, "debug_connections_page.png")
     if os.path.exists(path):
@@ -164,13 +193,13 @@ def get_active_scrape():
 
 
 @router.post("/scrape-connections")
-async def scrape_connections(req: ScrapeRequest = ScrapeRequest()):
-    """Trigger LinkedIn connection scraping job. Use force=true to re-scrape."""
+async def scrape_connections(req: ScrapeRequest = ScrapeRequest(), user_id: str = Depends(get_user_id)):
+    """Trigger LinkedIn connection scraping job."""
     task = WorkerTask(
         task_type=TaskType.SCRAPE_CONNECTIONS,
-        payload={"force": req.force},
+        payload={"force": req.force, "user_id": user_id},
     )
-    task_id = await worker.enqueue(task)
+    task_id = await worker_pool.enqueue(task)
     return JobStatusOut(
         job_id=task_id,
         status="queued",
