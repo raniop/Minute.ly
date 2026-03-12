@@ -973,25 +973,15 @@ class LinkedInAutomation:
                 print(f"[SCRAPER] Scroll {scroll_num + 1}: {current_count} /in/ links (~{approx_connections} connections), no_change={no_change_count}")
 
         # Extract connection data using JavaScript
+        # Strategy: collect ALL /in/ links, group by normalised URL,
+        # then pick the best name (shortest non-empty text) per profile.
         connections = self.page.evaluate("""() => {
             const links = document.querySelectorAll('a[href*="/in/"]');
-            const seen = new Set();
-            const results = [];
+            const profileMap = {};  // normalised URL -> {names: [], titles: [], el: firstElement}
 
             links.forEach(a => {
                 const href = a.getAttribute('href');
                 if (!href) return;
-
-                // Only process name-only links (inside a <p> tag)
-                // LinkedIn renders 3 links per connection card:
-                //   1. Image link (empty text, no <p> parent)
-                //   2. Container link ("NameTitle" concatenated, no <p> parent)
-                //   3. Name-only link (just name, inside a <p> tag)
-                const pTag = a.closest('p');
-                if (!pTag) return;
-
-                const text = a.textContent.trim();
-                if (!text) return;
                 if (href.includes('/in/me/') || href.includes('/in/edit/')) return;
 
                 // Normalize URL for dedup
@@ -999,38 +989,69 @@ class LinkedInAutomation:
                 if (profileUrl.startsWith('/')) {
                     profileUrl = 'https://www.linkedin.com' + profileUrl;
                 }
+                // Strip locale prefix like /he/ or /en/
                 profileUrl = profileUrl.replace(/\\/[a-z]{2}\\/$/, '/');
+                // Strip query params
+                profileUrl = profileUrl.split('?')[0];
+                // Ensure trailing slash for consistency
+                if (!profileUrl.endsWith('/')) profileUrl += '/';
 
-                if (seen.has(profileUrl)) return;
-                seen.add(profileUrl);
+                const text = a.textContent.trim();
 
-                const fullName = text;
-
-                // Find the title/occupation from nearby text
-                // Walk up the DOM to find the connection card container
-                let title = '';
-                let container = a;
-                for (let i = 0; i < 6; i++) {
-                    if (container.parentElement) container = container.parentElement;
+                if (!profileMap[profileUrl]) {
+                    profileMap[profileUrl] = { names: [], el: a };
                 }
-                const allP = container.querySelectorAll('p');
-                for (const p of allP) {
-                    const pText = p.textContent.trim();
-                    if (pText && pText !== fullName
-                        && !pText.includes('connections')
-                        && !pText.includes('Sort by')
-                        && !pText.includes('Search')) {
-                        title = pText;
+                if (text) {
+                    profileMap[profileUrl].names.push(text);
+                }
+            });
+
+            const results = [];
+            for (const [url, data] of Object.entries(profileMap)) {
+                if (data.names.length === 0) continue;
+
+                // Pick the shortest name — this is typically just the person's name
+                // (longer strings are "Name + Title" concatenations)
+                const names = data.names.sort((a, b) => a.length - b.length);
+                const fullName = names[0];
+
+                // Try to extract title from a longer variant that contains the name
+                let title = '';
+                for (const n of names) {
+                    if (n.length > fullName.length && n.startsWith(fullName)) {
+                        title = n.substring(fullName.length).trim();
                         break;
                     }
                 }
 
+                // Fallback: walk up DOM to find nearby text that looks like a title
+                if (!title) {
+                    try {
+                        let container = data.el;
+                        for (let i = 0; i < 6; i++) {
+                            if (container.parentElement) container = container.parentElement;
+                        }
+                        const spans = container.querySelectorAll('span, p, div');
+                        for (const el of spans) {
+                            if (el.children.length > 2) continue;  // skip containers
+                            const t = el.textContent.trim();
+                            if (t && t !== fullName && t.length > 3 && t.length < 120
+                                && !t.includes('connections') && !t.includes('Sort by')
+                                && !t.includes('Search') && !t.includes('Connect')
+                                && !t.includes('Message') && !t.includes('Follow')) {
+                                title = t;
+                                break;
+                            }
+                        }
+                    } catch(e) {}
+                }
+
                 results.push({
-                    profile_url: profileUrl,
+                    profile_url: url,
                     full_name: fullName,
                     title: title
                 });
-            });
+            }
 
             return results;
         }""")
