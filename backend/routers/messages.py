@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from typing import Optional
 
 from backend.database import get_db
+from backend.auth import get_optional_user_id
 from backend.models.message import Message
 from backend.schemas.message import MessageOut, MessageTemplateOut
 from backend.services.message_service import get_templates
@@ -18,8 +19,11 @@ def list_messages(
     page: int = Query(1, ge=1),
     per_page: int = Query(50, ge=1, le=200),
     db: Session = Depends(get_db),
+    user_id: Optional[str] = Depends(get_optional_user_id),
 ):
     query = db.query(Message)
+    if user_id:
+        query = query.filter(Message.owner_linkedin_id == user_id)
     if contact_id:
         query = query.filter(Message.contact_id == contact_id)
     if status:
@@ -45,8 +49,15 @@ def list_templates(
 
 
 @router.get("/{message_id}", response_model=MessageOut)
-def get_message(message_id: int, db: Session = Depends(get_db)):
-    message = db.query(Message).filter(Message.id == message_id).first()
+def get_message(
+    message_id: int,
+    db: Session = Depends(get_db),
+    user_id: Optional[str] = Depends(get_optional_user_id),
+):
+    query = db.query(Message).filter(Message.id == message_id)
+    if user_id:
+        query = query.filter(Message.owner_linkedin_id == user_id)
+    message = query.first()
     if not message:
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Message not found")

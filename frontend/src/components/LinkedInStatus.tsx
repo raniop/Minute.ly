@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { getWorkerStatus, loginLinkedIn, verifyLinkedIn, checkLogin, logoutLinkedIn } from '../api/client'
 
 interface Props {
@@ -6,6 +7,7 @@ interface Props {
 }
 
 export default function LinkedInStatus({ onStatusChange }: Props) {
+  const queryClient = useQueryClient()
   const [loading, setLoading] = useState(false)
   const [status, setStatus] = useState<'disconnected' | 'connecting' | 'verification' | 'connected'>('disconnected')
   const [message, setMessage] = useState('')
@@ -79,6 +81,8 @@ export default function LinkedInStatus({ onStatusChange }: Props) {
       const result = await loginLinkedIn(email, password)
       if (result.current_user_id) setUserId(result.current_user_id)
       if (result.status === 'connected') {
+        // Clear all cached data from previous user
+        queryClient.clear()
         setStatus('connected')
         onStatusChange?.(true)
       } else if (result.status === 'verification_needed') {
@@ -121,6 +125,7 @@ export default function LinkedInStatus({ onStatusChange }: Props) {
     try {
       const result = await verifyLinkedIn(verifyCode)
       if (result.status === 'connected') {
+        queryClient.clear()
         setStatus('connected')
         onStatusChange?.(true)
       } else if (result.status === 'verification_needed') {
@@ -139,6 +144,8 @@ export default function LinkedInStatus({ onStatusChange }: Props) {
     setLoading(true)
     try {
       await logoutLinkedIn()
+      // Clear ALL cached data so next user doesn't see previous user's data
+      queryClient.clear()
       setStatus('disconnected')
       setEmail('')
       setPassword('')

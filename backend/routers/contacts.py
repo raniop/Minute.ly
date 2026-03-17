@@ -78,8 +78,11 @@ def get_stats(db: Session = Depends(get_db), user_id: str | None = Depends(get_o
 
 
 @router.get("/{contact_id}", response_model=ContactOut)
-def get_contact(contact_id: int, db: Session = Depends(get_db)):
-    contact = db.query(Contact).filter(Contact.id == contact_id).first()
+def get_contact(contact_id: int, db: Session = Depends(get_db), user_id: Optional[str] = Depends(get_optional_user_id)):
+    query = db.query(Contact).filter(Contact.id == contact_id)
+    if user_id:
+        query = query.filter(Contact.owner_linkedin_id == user_id)
+    contact = query.first()
     if not contact:
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="Contact not found")
