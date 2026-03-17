@@ -5,13 +5,14 @@ Uses LinkedIn user ID as identity key. After a user logs in via LinkedIn,
 a session token (UUID) is created and stored as an HTTP-only cookie.
 All subsequent API requests include this cookie automatically.
 
-Session store is in-memory (lost on restart), but LinkedIn cookies persist
-on disk so users just need to re-trigger login to restore sessions.
+Sessions are persisted to disk (JSON) so they survive server restarts.
 """
+import json
 import time
 import uuid
 import logging
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 from fastapi import Request, HTTPException, Response
@@ -22,6 +23,13 @@ SESSION_TTL = 30 * 24 * 3600  # 30 days
 COOKIE_NAME = "session_token"
 
 
+def _sessions_file() -> Path:
+    """Path to the persisted sessions file."""
+    import os
+    data_dir = Path(os.environ.get("DATA_DIR", "."))
+    return data_dir / "sessions.json"
+
+
 @dataclass
 class UserSessionInfo:
     linkedin_id: str
@@ -29,10 +37,42 @@ class UserSessionInfo:
 
 
 class SessionStore:
-    """In-memory session store mapping tokens to user info."""
+    """Session store mapping tokens to user info. Persisted to disk."""
 
     def __init__(self):
         self._sessions: dict[str, UserSessionInfo] = {}
+        self._load()
+
+    def _load(self):
+        """Load sessions from disk."""
+        path = _sessions_file()
+        if path.exists():
+            try:
+                data = json.loads(path.read_text())
+                now = time.time()
+                for token, info in data.items():
+                    created = info.get("created_at", 0)
+                    if now - created < SESSION_TTL:
+                        self._sessions[token] = UserSessionInfo(
+                            linkedin_id=info["linkedin_id"],
+                            created_at=created,
+                        )
+                logger.info(f"Loaded {len(self._sessions)} sessions from disk.")
+            except Exception as e:
+                logger.warning(f"Failed to load sessions: {e}")
+
+    def _save(self):
+        """Persist sessions to disk."""
+        try:
+            path = _sessions_file()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            data = {
+                token: {"linkedin_id": info.linkedin_id, "created_at": info.created_at}
+                for token, info in self._sessions.items()
+            }
+            path.write_text(json.dumps(data))
+        except Exception as e:
+            logger.warning(f"Failed to save sessions: {e}")
 
     def create(self, linkedin_id: str) -> str:
         """Create a new session for a LinkedIn user. Returns token."""
@@ -44,6 +84,7 @@ class SessionStore:
         token = str(uuid.uuid4())
         self._sessions[token] = UserSessionInfo(linkedin_id=linkedin_id)
         logger.info(f"Session created for user {linkedin_id}")
+        self._save()
         return token
 
     def get_user_id(self, token: str) -> Optional[str]:
@@ -53,12 +94,14 @@ class SessionStore:
             return None
         if time.time() - info.created_at > SESSION_TTL:
             del self._sessions[token]
+            self._save()
             return None
         return info.linkedin_id
 
     def remove(self, token: str) -> None:
         """Remove a session."""
         self._sessions.pop(token, None)
+        self._save()
 
     def remove_by_user(self, linkedin_id: str) -> None:
         """Remove all sessions for a user."""
@@ -66,6 +109,7 @@ class SessionStore:
             k: v for k, v in self._sessions.items()
             if v.linkedin_id != linkedin_id
         }
+        self._save()
 
 
 # Global session store

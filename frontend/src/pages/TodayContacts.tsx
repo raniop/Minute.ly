@@ -58,11 +58,22 @@ export default function TodayContacts() {
     return () => clearInterval(interval)
   }, [jobId])
 
+  const [sendError, setSendError] = useState<string | null>(null)
+
   const sendMutation = useMutation({
     mutationFn: (items: SendItem[]) => sendTodayMessages(items),
     onSuccess: (data) => {
+      setSendError(null)
       setJobId(data.job_id)
       setJobProgress({ progress: 0, total: data.total, status: 'queued' })
+    },
+    onError: (error: any) => {
+      const status = error?.response?.status
+      if (status === 401) {
+        setSendError('Session expired. Please go back to the LinkedIn page and re-login.')
+      } else {
+        setSendError(error?.response?.data?.detail || error?.message || 'Failed to send messages')
+      }
     },
   })
 
@@ -166,6 +177,13 @@ export default function TodayContacts() {
           </button>
         </div>
       </div>
+
+      {sendError && (
+        <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg flex items-center justify-between">
+          <span className="text-sm text-red-700">{sendError}</span>
+          <button onClick={() => setSendError(null)} className="text-red-500 hover:text-red-700 text-sm ml-4">✕</button>
+        </div>
+      )}
 
       {isSending && (
         <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">

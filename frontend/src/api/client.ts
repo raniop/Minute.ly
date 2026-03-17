@@ -18,6 +18,18 @@ const api = axios.create({
   withCredentials: true,
 })
 
+// Redirect to login page on 401 (session expired after deploy/restart)
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      // Dispatch a custom event so the app can show a login prompt
+      window.dispatchEvent(new CustomEvent('session-expired'))
+    }
+    return Promise.reject(error)
+  }
+)
+
 // Batches
 export const getTodayBatch = () =>
   api.get<TodayBatch>('/batches/today').then(r => r.data)
