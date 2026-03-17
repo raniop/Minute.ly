@@ -62,9 +62,11 @@ def get_recent_messages(db: Session = Depends(get_db)):
             "id": m.id,
             "contact_id": m.contact_id,
             "contact_name": m.contact.full_name if m.contact else "?",
+            "profile_url": m.contact.profile_url if m.contact else "?",
             "type": m.message_type,
             "status": m.status,
             "error": m.error_message,
+            "attach_video": m.attach_video,
             "sent_at": m.sent_at.isoformat() if m.sent_at else None,
             "created_at": m.created_at.isoformat() if m.created_at else None,
         }

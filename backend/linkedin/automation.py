@@ -39,12 +39,20 @@ class LinkedInAutomation:
     def navigate_to_profile(self, url: str) -> bool:
         """Navigate to a LinkedIn profile URL. Returns True if successful."""
         try:
-            self.logger.debug(f"Navigating to {url}")
+            self.logger.info(f"Navigating to {url}")
             self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
 
             current_url = self.page.url.lower()
+            self.logger.info(f"After goto, current URL: {self.page.url}")
+
             if "linkedin.com/login" in current_url or "linkedin.com/authwall" in current_url:
                 self.logger.error("Redirected to login page. Session may have expired.")
+                self._screenshot_debug("nav_login_redirect")
+                return False
+
+            if any(term in current_url for term in ["checkpoint", "challenge", "security"]):
+                self.logger.error(f"Security page detected during navigation: {self.page.url}")
+                self._screenshot_debug("nav_security_challenge")
                 return False
 
             try:
@@ -53,6 +61,7 @@ class LinkedInAutomation:
                 )
                 if not_found.is_visible(timeout=3000):
                     self.logger.error(f"Profile not found: {url}")
+                    self._screenshot_debug("nav_profile_not_found")
                     return False
             except Exception:
                 pass
@@ -62,6 +71,7 @@ class LinkedInAutomation:
 
         except Exception as e:
             self.logger.error(f"Navigation failed for {url}: {e}")
+            self._screenshot_debug("nav_exception")
             return False
 
     def check_login_status(self) -> bool:
@@ -433,7 +443,7 @@ class LinkedInAutomation:
 
     def attach_video(self, video_path: Path) -> bool:
         """Attach a video file in the currently open message overlay."""
-        self.logger.debug(f"Attaching video: {video_path}")
+        self.logger.info(f"Attaching video: {video_path} (exists={video_path.exists()}, size={video_path.stat().st_size if video_path.exists() else 'N/A'})")
 
         file_set = False
 
@@ -458,6 +468,8 @@ class LinkedInAutomation:
             attach_selectors = [
                 "button[aria-label*='Attach' i]",
                 "button[aria-label*='file' i]",
+                "button[aria-label*='צרף']",
+                "button[aria-label*='קובץ']",
                 ".msg-form__footer-action button[aria-label*='Attach' i]",
                 ".msg-form__left-actions button[aria-label*='Attach' i]",
                 "button[data-control-name*='attach' i]",
@@ -503,6 +515,7 @@ class LinkedInAutomation:
 
             if attach_btn is None:
                 self.logger.warning("Could not find attachment/paperclip button.")
+                self._screenshot_debug("no_attach_button")
                 return False
 
             try:
@@ -573,6 +586,7 @@ class LinkedInAutomation:
 
         msg_btn = None
         try:
+            # Search for Message button - supports English ("Message") and Hebrew ("הודעה")
             msg_handle = self.page.evaluate_handle("""
                 () => {
                     const mainEl = document.querySelector('main');
@@ -580,7 +594,7 @@ class LinkedInAutomation:
                     const candidates = mainEl.querySelectorAll('button, a');
                     for (const el of candidates) {
                         const text = el.textContent.trim();
-                        if (!/^\\s*Message\\s*$/i.test(text)) continue;
+                        if (!/^\\s*(Message|הודעה)\\s*$/i.test(text)) continue;
                         const rect = el.getBoundingClientRect();
                         if (rect.width === 0 || rect.height === 0) continue;
                         if (el.closest('.msg-overlay-list-bubble') ||
@@ -606,6 +620,8 @@ class LinkedInAutomation:
             fallback_selectors = [
                 "main button:has-text('Message')",
                 "main a:has-text('Message')",
+                "main button:has-text('הודעה')",
+                "main a:has-text('הודעה')",
             ]
             for sel in fallback_selectors:
                 try:
@@ -616,6 +632,16 @@ class LinkedInAutomation:
                         break
                 except Exception:
                     continue
+
+        # Last resort: try aria-label based detection
+        if msg_btn is None:
+            try:
+                candidate = self.page.locator("main button[aria-label*='message' i], main button[aria-label*='הודעה']").first
+                if candidate.is_visible(timeout=2000):
+                    msg_btn = candidate
+                    self.logger.debug("Message button found via aria-label.")
+            except Exception:
+                pass
 
         if msg_btn is None:
             self.logger.error("Message button not found. May not be connected.")
@@ -662,6 +688,7 @@ class LinkedInAutomation:
         msg_box_selectors = [
             "div[role='textbox'][contenteditable='true'][aria-label*='Write a message' i]",
             "div[role='textbox'][contenteditable='true'][aria-label*='message' i]",
+            "div[role='textbox'][contenteditable='true'][aria-label*='הודעה']",
             "div.msg-form__contenteditable[contenteditable='true']",
             "div.msg-form__msg-content-container div[contenteditable='true']",
             "form.msg-form div[contenteditable='true']",
@@ -734,7 +761,9 @@ class LinkedInAutomation:
             send_selectors = [
                 "button.msg-form__send-button[type='submit']",
                 "button[type='submit']:has-text('Send')",
+                "button[type='submit']:has-text('שלח')",
                 "button[aria-label='Send' i]",
+                "button[aria-label*='שלח']",
             ]
             for sel in send_selectors:
                 try:
@@ -747,9 +776,18 @@ class LinkedInAutomation:
                     continue
 
             if send_btn is None:
-                send_btn = self.page.get_by_role(
-                    "button", name=re.compile(r"^Send$", re.I)
-                ).first
+                try:
+                    send_btn = self.page.get_by_role(
+                        "button", name=re.compile(r"^(Send|שלח)$", re.I)
+                    ).first
+                except Exception:
+                    pass
+
+            if send_btn is None:
+                self.logger.error("Send button not found with any selector.")
+                self._screenshot_debug("no_send_button")
+                self._close_message_overlay()
+                return False
 
             is_disabled = send_btn.is_disabled()
             if is_disabled:
@@ -804,7 +842,7 @@ class LinkedInAutomation:
                     const candidates = mainEl.querySelectorAll('button, a');
                     for (const el of candidates) {
                         const text = el.textContent.trim();
-                        if (!/^\\s*Message\\s*$/i.test(text)) continue;
+                        if (!/^\\s*(Message|הודעה)\\s*$/i.test(text)) continue;
                         const rect = el.getBoundingClientRect();
                         if (rect.width === 0 || rect.height === 0) continue;
                         if (el.closest('.msg-overlay-list-bubble') ||
@@ -835,7 +873,8 @@ class LinkedInAutomation:
                     ".msg-s-message-group__name, .msg-s-message-group__profile-link"
                 ).inner_text().strip()
 
-                if sender.lower() != "you":
+                # "you" in English, "את/ה" in Hebrew
+                if sender.lower() not in ("you", "את/ה", "אתה", "את"):
                     self.logger.info(f"Reply detected from: {sender}")
                     self._close_message_overlay()
                     return True
@@ -974,10 +1013,11 @@ class LinkedInAutomation:
 
         # Extract connection data using JavaScript
         # Strategy: collect ALL /in/ links, group by normalised URL,
-        # then pick the best name (shortest non-empty text) per profile.
+        # use innerText (preserves line breaks between elements) instead of
+        # textContent (which concatenates without separators).
         connections = self.page.evaluate("""() => {
             const links = document.querySelectorAll('a[href*="/in/"]');
-            const profileMap = {};  // normalised URL -> {names: [], titles: [], el: firstElement}
+            const profileMap = {};  // normalised URL -> {names: [], el: firstElement}
 
             links.forEach(a => {
                 const href = a.getAttribute('href');
@@ -996,31 +1036,73 @@ class LinkedInAutomation:
                 // Ensure trailing slash for consistency
                 if (!profileUrl.endsWith('/')) profileUrl += '/';
 
-                const text = a.textContent.trim();
+                // Use innerText which preserves line breaks between block elements,
+                // preventing name+title concatenation like "John DoeEngineer at X"
+                const rawText = a.innerText.trim();
+                // Also try to get just the name from aria-label or first span
+                let nameOnly = '';
+                const ariaLabel = a.getAttribute('aria-label');
+                if (ariaLabel) {
+                    // aria-label often has just the name or "View X's profile"
+                    const m = ariaLabel.match(/^(?:View\\s+)?(.+?)(?:'s profile|$)/i);
+                    if (m) nameOnly = m[1].trim();
+                }
+                if (!nameOnly) {
+                    // Try first span/text child which usually has just the name
+                    const firstSpan = a.querySelector('span[aria-hidden="true"]') ||
+                                      a.querySelector('span:first-child');
+                    if (firstSpan) {
+                        const spanText = firstSpan.textContent.trim();
+                        // Only use if it looks like a name (short, no pipe chars)
+                        if (spanText && spanText.length < 60 && !spanText.includes('|')) {
+                            nameOnly = spanText;
+                        }
+                    }
+                }
 
                 if (!profileMap[profileUrl]) {
-                    profileMap[profileUrl] = { names: [], el: a };
+                    profileMap[profileUrl] = { names: [], rawTexts: [], el: a };
                 }
-                if (text) {
-                    profileMap[profileUrl].names.push(text);
+                if (nameOnly) {
+                    profileMap[profileUrl].names.push(nameOnly);
+                }
+                if (rawText) {
+                    profileMap[profileUrl].rawTexts.push(rawText);
                 }
             });
 
             const results = [];
             for (const [url, data] of Object.entries(profileMap)) {
-                if (data.names.length === 0) continue;
+                if (data.names.length === 0 && data.rawTexts.length === 0) continue;
 
-                // Pick the shortest name — this is typically just the person's name
-                // (longer strings are "Name + Title" concatenations)
-                const names = data.names.sort((a, b) => a.length - b.length);
-                const fullName = names[0];
-
-                // Try to extract title from a longer variant that contains the name
+                let fullName = '';
                 let title = '';
-                for (const n of names) {
-                    if (n.length > fullName.length && n.startsWith(fullName)) {
-                        title = n.substring(fullName.length).trim();
-                        break;
+
+                // Prefer the name extracted from aria-label/span
+                if (data.names.length > 0) {
+                    // Pick the shortest clean name
+                    const sortedNames = data.names.sort((a, b) => a.length - b.length);
+                    fullName = sortedNames[0];
+                }
+
+                // Fallback: use first line of innerText (name is usually on the first line)
+                if (!fullName && data.rawTexts.length > 0) {
+                    const shortest = data.rawTexts.sort((a, b) => a.length - b.length)[0];
+                    const lines = shortest.split('\\n').map(l => l.trim()).filter(l => l);
+                    fullName = lines[0] || shortest;
+                    if (lines.length > 1) {
+                        title = lines.slice(1).join(' ').trim();
+                    }
+                }
+
+                // Try to extract title from rawTexts if not found yet
+                if (!title) {
+                    for (const raw of data.rawTexts) {
+                        const lines = raw.split('\\n').map(l => l.trim()).filter(l => l);
+                        if (lines.length > 1 && lines[0] === fullName) {
+                            title = lines.slice(1).join(' ').trim();
+                            break;
+                        }
                     }
                 }
 
@@ -1033,7 +1115,7 @@ class LinkedInAutomation:
                         }
                         const spans = container.querySelectorAll('span, p, div');
                         for (const el of spans) {
-                            if (el.children.length > 2) continue;  // skip containers
+                            if (el.children.length > 2) continue;
                             const t = el.textContent.trim();
                             if (t && t !== fullName && t.length > 3 && t.length < 120
                                 && !t.includes('connections') && !t.includes('Sort by')
@@ -1046,11 +1128,13 @@ class LinkedInAutomation:
                     } catch(e) {}
                 }
 
-                results.push({
-                    profile_url: url,
-                    full_name: fullName,
-                    title: title
-                });
+                if (fullName) {
+                    results.push({
+                        profile_url: url,
+                        full_name: fullName,
+                        title: title
+                    });
+                }
             }
 
             return results;

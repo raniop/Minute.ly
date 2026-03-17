@@ -275,7 +275,44 @@ class UserSession:
         message_ids = task.payload.get("message_ids", [])
         task.total = len(message_ids)
 
+        if not message_ids:
+            logger.warning(f"[{self.user_id}] No message IDs to send.")
+            return
+
+        # Pre-flight: verify LinkedIn session is still active
+        logger.info(f"[{self.user_id}] Pre-flight login check before sending {len(message_ids)} messages...")
+        if not self._linkedin.check_login_status():
+            logger.error(f"[{self.user_id}] LinkedIn session expired! Attempting cookie re-login...")
+            # Try to reload cookies
+            if CookieManager.cookies_exist(self.cookies_file):
+                CookieManager.load_cookies(self._context, self.cookies_file)
+                if not self._linkedin.check_login_status():
+                    logger.error(f"[{self.user_id}] Cookie re-login failed. Cannot send messages.")
+                    task.error = "LinkedIn session expired. Please re-login."
+                    task.status = "failed"
+                    # Mark all messages as failed
+                    db = SessionLocal()
+                    try:
+                        for msg_id in message_ids:
+                            message = db.query(Message).filter(Message.id == msg_id).first()
+                            if message:
+                                message.status = "failed"
+                                message.error_message = "LinkedIn session expired"
+                        db.commit()
+                    finally:
+                        db.close()
+                    return
+                logger.info(f"[{self.user_id}] Cookie re-login successful!")
+            else:
+                logger.error(f"[{self.user_id}] No cookies file found. Cannot re-login.")
+                task.error = "LinkedIn session expired. Please re-login."
+                task.status = "failed"
+                return
+
+        logger.info(f"[{self.user_id}] Login verified. Starting to send {len(message_ids)} messages.")
+
         db = SessionLocal()
+        nav_failures = 0
         try:
             for idx, msg_id in enumerate(message_ids):
                 message = db.query(Message).filter(Message.id == msg_id).first()
@@ -284,16 +321,32 @@ class UserSession:
                     continue
 
                 contact = message.contact
-                logger.info(f"[{self.user_id}][MSG {idx+1}/{len(message_ids)}] {contact.full_name}")
+                logger.info(f"[{self.user_id}][MSG {idx+1}/{len(message_ids)}] {contact.full_name} -> {contact.profile_url}")
                 message.status = "sending"
                 db.commit()
 
                 if not self._linkedin.navigate_to_profile(contact.profile_url):
+                    nav_failures += 1
                     message.status = "failed"
                     message.error_message = "Failed to navigate to profile"
                     db.commit()
                     task.progress += 1
+                    # If 3+ consecutive nav failures, session is probably dead
+                    if nav_failures >= 3:
+                        logger.error(f"[{self.user_id}] {nav_failures} consecutive navigation failures. Session may be dead. Aborting.")
+                        task.error = f"{nav_failures} consecutive navigation failures. Session may have expired."
+                        task.status = "failed"
+                        # Mark remaining messages as failed
+                        for remaining_id in message_ids[idx+1:]:
+                            rem = db.query(Message).filter(Message.id == remaining_id).first()
+                            if rem:
+                                rem.status = "failed"
+                                rem.error_message = "Aborted: session expired"
+                        db.commit()
+                        return
                     continue
+                else:
+                    nav_failures = 0  # Reset on success
 
                 self._random_delay()
 
@@ -308,6 +361,9 @@ class UserSession:
                 video_path = None
                 if message.attach_video and settings.demo_video_file.exists():
                     video_path = settings.demo_video_file
+                    logger.info(f"[{self.user_id}][MSG {idx+1}] Will attach video: {video_path} (exists={video_path.exists()})")
+                elif message.attach_video:
+                    logger.warning(f"[{self.user_id}][MSG {idx+1}] attach_video=True but video file not found at {settings.demo_video_file}")
 
                 try:
                     success = self._linkedin.send_message(message.content, video_path=video_path)
@@ -323,9 +379,11 @@ class UserSession:
                     message.status = "sent"
                     message.sent_at = datetime.utcnow()
                     contact.last_messaged_at = datetime.utcnow()
+                    logger.info(f"[{self.user_id}][MSG {idx+1}] SENT successfully to {contact.full_name}")
                 else:
                     message.status = "failed"
                     message.error_message = "send_message returned False"
+                    logger.warning(f"[{self.user_id}][MSG {idx+1}] FAILED to send to {contact.full_name}")
 
                 db.commit()
                 task.progress += 1

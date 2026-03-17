@@ -50,6 +50,13 @@ def get_worker_status(user_id: str | None = Depends(get_optional_user_id)):
     return worker_pool.get_session_status(user_id)
 
 
+@router.get("/logs")
+def get_logs(limit: int = 200, level: str | None = None):
+    """Return recent application logs for diagnostics."""
+    from backend.log_buffer import get_recent_logs
+    return get_recent_logs(limit=limit, level=level)
+
+
 @router.get("/debug")
 def get_debug_info(user_id: str = Depends(get_user_id)):
     """Return current browser page state for debugging."""
