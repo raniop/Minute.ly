@@ -168,7 +168,9 @@ class WorkerPool:
             session = self._sessions.pop(user_id, None)
 
         if session:
-            session.close()
+            if session._task_running:
+                logger.warning(f"User {user_id} logout requested while task is running - will close after task completes.")
+            session.close()  # Thread-safe: defers if task is running
             # Delete cookies
             cookies_file = settings.cookies_file_for(user_id)
             if cookies_file.exists():

@@ -8,6 +8,7 @@ Each UserSession owns:
 """
 import logging
 import random
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -49,6 +50,8 @@ class UserSession:
         self._linkedin: Optional[LinkedInAutomation] = None
         self._browser_ready = False
         self._checking_login = False
+        self._task_running = False  # True while a task is executing
+        self._close_requested = False  # Set when close() is called during a task
         self.last_activity = time.time()
 
     @property
@@ -262,13 +265,23 @@ class UserSession:
             return
 
         self._touch()
+        self._task_running = True
+        self._close_requested = False
 
-        if task.task_type == TaskType.SEND_MESSAGES:
-            self._send_messages(task)
-        elif task.task_type == TaskType.SEND_FOLLOWUPS:
-            self._send_messages(task)  # Same logic
-        elif task.task_type == TaskType.SCRAPE_CONNECTIONS:
-            self._scrape_connections(task)
+        try:
+            if task.task_type == TaskType.SEND_MESSAGES:
+                self._send_messages(task)
+            elif task.task_type == TaskType.SEND_FOLLOWUPS:
+                self._send_messages(task)  # Same logic
+            elif task.task_type == TaskType.SCRAPE_CONNECTIONS:
+                self._scrape_connections(task)
+        finally:
+            self._task_running = False
+            self._touch()
+            # If close was requested while task was running, do it now (in PW thread)
+            if self._close_requested:
+                logger.info(f"[{self.user_id}] Deferred close: executing now that task is done.")
+                self._do_browser_cleanup()
 
     def _send_messages(self, task: WorkerTask):
         """Send messages to contacts."""
@@ -509,8 +522,8 @@ class UserSession:
         except Exception as e:
             return {"page": "error", "error": str(e)}
 
-    def close(self):
-        """Close the browser and free resources."""
+    def _do_browser_cleanup(self):
+        """Actually close browser resources. MUST run in PW thread."""
         self._browser_ready = False
         self._linkedin = None
         try:
@@ -524,21 +537,28 @@ class UserSession:
         self._browser = None
         self._context = None
         self._page = None
+
+    def close(self):
+        """Close the browser and free resources (thread-safe)."""
+        if self._task_running:
+            # Defer: let the running task finish, then it will call _do_browser_cleanup
+            logger.info(f"[{self.user_id}] Close requested while task running - deferring.")
+            self._close_requested = True
+            self._browser_ready = False
+            return
+
+        # Run cleanup in the PW executor thread to avoid greenlet errors
+        try:
+            future = self._executor.submit(self._do_browser_cleanup)
+            future.result(timeout=10)  # Wait up to 10s for cleanup
+        except Exception as e:
+            logger.debug(f"[{self.user_id}] Browser cleanup via executor: {e}")
+            # Fallback: try direct cleanup (executor may already be dead)
+            self._do_browser_cleanup()
+
         self._executor.shutdown(wait=False)
         logger.info(f"[{self.user_id}] Session closed.")
 
     def _close_browser(self):
-        """Close browser without shutting down executor."""
-        self._browser_ready = False
-        self._linkedin = None
-        try:
-            if self._browser:
-                self._browser.close()
-            if self._pw:
-                self._pw.stop()
-        except Exception as e:
-            logger.debug(f"[{self.user_id}] Browser cleanup: {e}")
-        self._pw = None
-        self._browser = None
-        self._context = None
-        self._page = None
+        """Close browser without shutting down executor (runs in PW thread already)."""
+        self._do_browser_cleanup()

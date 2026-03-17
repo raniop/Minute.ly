@@ -119,8 +119,9 @@ class LinkedInAutomation:
     def get_my_profile_id(self) -> Optional[str]:
         """Get the logged-in user's LinkedIn profile ID.
 
-        Navigates to /in/me/ which redirects to the user's actual profile,
-        then extracts the profile ID from the URL.
+        Tries multiple strategies:
+        1. Navigate to /in/me/ which redirects to actual profile
+        2. Extract from nav menu or page meta
         """
         try:
             self.page.goto(
@@ -128,16 +129,32 @@ class LinkedInAutomation:
                 wait_until="domcontentloaded",
                 timeout=15000,
             )
-            time.sleep(3)
-            current_url = self.page.url.rstrip("/")
-            # URL will be like https://www.linkedin.com/in/john-doe-12345
-            match = re.search(r"/in/([^/?]+)", current_url)
-            if match:
-                profile_id = match.group(1)
-                if profile_id != "me":
+            # Wait for possible redirect (LinkedIn may take a moment)
+            for _ in range(5):
+                time.sleep(2)
+                current_url = self.page.url.rstrip("/")
+                match = re.search(r"/in/([^/?]+)", current_url)
+                if match and match.group(1) != "me":
+                    profile_id = match.group(1)
                     self.logger.info(f"Detected logged-in user: {profile_id}")
                     return profile_id
-            self.logger.warning(f"Could not extract profile ID from URL: {current_url}")
+
+            # Strategy 2: Try to extract from the page itself (nav-menu link)
+            try:
+                profile_link = self.page.query_selector('a[href*="/in/"][href*="miniProfile"]')
+                if not profile_link:
+                    profile_link = self.page.query_selector('.global-nav a[href*="/in/"]')
+                if profile_link:
+                    href = profile_link.get_attribute("href") or ""
+                    match = re.search(r"/in/([^/?]+)", href)
+                    if match and match.group(1) != "me":
+                        profile_id = match.group(1)
+                        self.logger.info(f"Detected logged-in user from nav: {profile_id}")
+                        return profile_id
+            except Exception:
+                pass
+
+            self.logger.warning(f"Could not extract profile ID from URL: {self.page.url}")
             return None
         except Exception as e:
             self.logger.error(f"Failed to get profile ID: {e}")
