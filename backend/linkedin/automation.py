@@ -130,10 +130,12 @@ class LinkedInAutomation:
                 timeout=15000,
             )
             # Wait for possible redirect (LinkedIn may take a moment)
-            for _ in range(5):
+            for attempt in range(5):
                 time.sleep(2)
-                current_url = self.page.url.rstrip("/")
-                match = re.search(r"/in/([^/?]+)", current_url)
+                current_url = self.page.url
+                self.logger.debug(f"Profile ID attempt {attempt+1}: URL={current_url}")
+                # Strip trailing slash before query string for cleaner matching
+                match = re.search(r"/in/([^/?#]+)", current_url)
                 if match and match.group(1) != "me":
                     profile_id = match.group(1)
                     self.logger.info(f"Detected logged-in user: {profile_id}")
