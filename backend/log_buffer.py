@@ -27,7 +27,7 @@ class _BufferHandler(logging.Handler):
 
 
 def setup_log_buffer():
-    """Attach the buffer handler to the root logger and 'minutely' logger."""
+    """Attach the buffer handler to the 'minutely' logger."""
     handler = _BufferHandler()
     handler.setLevel(logging.DEBUG)
     handler.setFormatter(logging.Formatter("%(name)s - %(message)s"))
@@ -36,10 +36,8 @@ def setup_log_buffer():
     minutely = logging.getLogger("minutely")
     minutely.setLevel(logging.DEBUG)
     minutely.addHandler(handler)
-
-    # Also capture root logger messages (print-like logs)
-    root = logging.getLogger()
-    root.addHandler(handler)
+    # Prevent duplicate entries: don't propagate to root which also has a handler
+    minutely.propagate = False
 
 
 def get_recent_logs(limit: int = 200, level: str | None = None) -> list[dict]:
