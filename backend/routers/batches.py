@@ -1,3 +1,5 @@
+from datetime import date
+
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
@@ -24,13 +26,17 @@ router = APIRouter()
 
 @router.get("/today", response_model=TodayBatchOut)
 def get_today_batch(db: Session = Depends(get_db), user_id: str | None = Depends(get_optional_user_id)):
-    return get_or_create_today_batch(db, user_id=user_id or "")
+    if not user_id:
+        return TodayBatchOut(batch_date=date.today(), contacts=[])
+    return get_or_create_today_batch(db, user_id=user_id)
 
 
 @router.post("/today/refresh", response_model=TodayBatchOut)
 def refresh_today_batch(req: RefreshRequest, db: Session = Depends(get_db), user_id: str | None = Depends(get_optional_user_id)):
     """Replace unselected contacts with new ones. Keeps selected contacts."""
-    return refresh_unselected(db, req.keep_contact_ids, user_id=user_id or "")
+    if not user_id:
+        return TodayBatchOut(batch_date=date.today(), contacts=[])
+    return refresh_unselected(db, req.keep_contact_ids, user_id=user_id)
 
 
 @router.post("/today/send", response_model=JobStatusOut)
@@ -40,7 +46,9 @@ async def send_today_messages(req: SendRequest, db: Session = Depends(get_db), u
 
 @router.get("/followups", response_model=FollowUpBatchOut)
 def get_followups(db: Session = Depends(get_db), user_id: str | None = Depends(get_optional_user_id)):
-    return get_followup_contacts(db, user_id=user_id or "")
+    if not user_id:
+        return FollowUpBatchOut(contacts=[])
+    return get_followup_contacts(db, user_id=user_id)
 
 
 @router.post("/followups/send", response_model=JobStatusOut)
