@@ -454,8 +454,9 @@ class UserSession:
                 if existing:
                     existing.is_connected = True
                     existing.connection_status = "connected"
-                    if not existing.owner_linkedin_id:
-                        existing.owner_linkedin_id = owner_id
+                    # Always update owner to the current (real) user ID
+                    # Fixes temp IDs like "login-xxx" being replaced with actual profile ID
+                    existing.owner_linkedin_id = owner_id
                     if title_text and not existing.title:
                         existing.title = title_text
                     if company and not existing.company:
@@ -479,6 +480,9 @@ class UserSession:
                 task.progress += 1
 
             db.commit()
+            task.status = "completed"
+            task.progress = len(connections)
+            task.total = len(connections)
             logger.info(f"[{self.user_id}] Scraping complete: {len(connections)} found, {added} new.")
         finally:
             db.close()
