@@ -48,7 +48,13 @@ def list_contacts(
         )
 
     total = query.count()
-    contacts = query.offset((page - 1) * per_page).limit(per_page).all()
+    contacts = (
+        query
+        .order_by(Contact.full_name.asc())
+        .offset((page - 1) * per_page)
+        .limit(per_page)
+        .all()
+    )
     return contacts
 
 
