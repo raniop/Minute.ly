@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { getContacts, getContactStats, scrapeConnections, getJobStatus, getContactsCacheStatus, getActiveScrape, sendTodayMessages } from '../api/client'
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import LinkedInStatus from '../components/LinkedInStatus'
 import { build_initial_message } from '../utils/messageTemplates'
 import type { SendItem } from '../types'
@@ -355,94 +355,95 @@ export default function ContactList() {
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {contacts?.map((contact) => (
-                  <tr key={contact.id}>
-                    <td colSpan={6} className="p-0">
-                      <div
-                        className={`flex items-center hover:bg-gray-50 cursor-pointer ${sendingContactId === contact.id ? 'bg-blue-50' : ''}`}
-                        onClick={() => handleQuickSend(contact)}
-                      >
-                        <td className="px-4 py-3 w-1/5">
-                          <a
-                            href={contact.profile_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-blue-600 hover:underline font-medium"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            {contact.full_name}
-                          </a>
-                        </td>
-                        <td className="px-4 py-3 text-gray-600 w-1/4 truncate">{contact.title}</td>
-                        <td className="px-4 py-3 text-gray-600 w-1/6">{contact.company}</td>
-                        <td className="px-4 py-3 w-1/8">
-                          {contact.has_replied ? (
-                            <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded-full text-xs">Replied</span>
-                          ) : contact.last_messaged_at ? (
-                            <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-xs">Messaged</span>
-                          ) : (
-                            <span className="px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full text-xs">New</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 text-gray-500 text-xs w-1/8">
-                          {contact.last_messaged_at
-                            ? new Date(contact.last_messaged_at).toLocaleDateString()
-                            : '-'}
-                        </td>
-                        <td className="px-4 py-3 text-center w-1/8">
-                          <button
-                            onClick={(e) => { e.stopPropagation(); handleQuickSend(contact) }}
-                            disabled={isSending}
-                            className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
-                              sendingContactId === contact.id
-                                ? 'bg-blue-600 text-white'
-                                : 'bg-gray-100 text-gray-700 hover:bg-blue-100 hover:text-blue-700'
-                            } disabled:opacity-50`}
-                          >
-                            {sendingContactId === contact.id ? 'Close' : 'Send'}
-                          </button>
-                        </td>
-                      </div>
-
-                      {/* Expandable send panel */}
-                      {sendingContactId === contact.id && (
-                        <div className="px-4 pb-4 pt-2 bg-blue-50 border-t border-blue-100">
-                          <div className="space-y-3">
-                            <div>
-                              <label className="text-xs font-medium text-gray-600 block mb-1">
-                                Message to {contact.first_name}
-                              </label>
-                              <textarea
-                                value={sendMessage}
-                                onChange={(e) => setSendMessage(e.target.value)}
-                                disabled={isSending}
-                                rows={4}
-                                className="w-full border border-gray-300 rounded-md p-2 text-sm focus:border-blue-400 focus:ring-1 focus:ring-blue-400 resize-none"
-                              />
-                            </div>
-                            <div className="flex items-center justify-between">
-                              <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
-                                <input
-                                  type="checkbox"
-                                  checked={sendAttachVideo}
-                                  onChange={(e) => setSendAttachVideo(e.target.checked)}
+                  <Fragment key={contact.id}>
+                    <tr
+                      className={`hover:bg-gray-50 cursor-pointer ${sendingContactId === contact.id ? 'bg-blue-50' : ''}`}
+                      onClick={() => handleQuickSend(contact)}
+                    >
+                      <td className="px-4 py-3">
+                        <a
+                          href={contact.profile_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-blue-600 hover:underline font-medium"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {contact.full_name}
+                        </a>
+                      </td>
+                      <td className="px-4 py-3 text-gray-600 max-w-[200px] truncate">{contact.title}</td>
+                      <td className="px-4 py-3 text-gray-600">{contact.company}</td>
+                      <td className="px-4 py-3">
+                        {contact.has_replied ? (
+                          <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded-full text-xs">Replied</span>
+                        ) : contact.last_messaged_at ? (
+                          <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-xs">Messaged</span>
+                        ) : (
+                          <span className="px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full text-xs">New</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-gray-500 text-xs">
+                        {contact.last_messaged_at
+                          ? new Date(contact.last_messaged_at).toLocaleDateString()
+                          : '-'}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleQuickSend(contact) }}
+                          disabled={isSending}
+                          className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
+                            sendingContactId === contact.id
+                              ? 'bg-blue-600 text-white'
+                              : 'bg-gray-100 text-gray-700 hover:bg-blue-100 hover:text-blue-700'
+                          } disabled:opacity-50`}
+                        >
+                          {sendingContactId === contact.id ? 'Close' : 'Send'}
+                        </button>
+                      </td>
+                    </tr>
+                    {/* Expandable send panel */}
+                    {sendingContactId === contact.id && (
+                      <tr>
+                        <td colSpan={6} className="p-0">
+                          <div className="px-4 pb-4 pt-2 bg-blue-50 border-t border-blue-100">
+                            <div className="space-y-3">
+                              <div>
+                                <label className="text-xs font-medium text-gray-600 block mb-1">
+                                  Message to {contact.first_name}
+                                </label>
+                                <textarea
+                                  value={sendMessage}
+                                  onChange={(e) => setSendMessage(e.target.value)}
                                   disabled={isSending}
-                                  className="rounded border-gray-300 text-blue-600"
+                                  rows={4}
+                                  className="w-full border border-gray-300 rounded-md p-2 text-sm focus:border-blue-400 focus:ring-1 focus:ring-blue-400 resize-none"
                                 />
-                                Attach demo video
-                              </label>
-                              <button
-                                onClick={handleSendMessage}
-                                disabled={isSending || !sendMessage.trim() || !browserConnected}
-                                className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                              >
-                                {isSending ? 'Sending...' : 'Send Message'}
-                              </button>
+                              </div>
+                              <div className="flex items-center justify-between">
+                                <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
+                                  <input
+                                    type="checkbox"
+                                    checked={sendAttachVideo}
+                                    onChange={(e) => setSendAttachVideo(e.target.checked)}
+                                    disabled={isSending}
+                                    className="rounded border-gray-300 text-blue-600"
+                                  />
+                                  Attach demo video
+                                </label>
+                                <button
+                                  onClick={handleSendMessage}
+                                  disabled={isSending || !sendMessage.trim() || !browserConnected}
+                                  className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                  {isSending ? 'Sending...' : 'Send Message'}
+                                </button>
+                              </div>
                             </div>
                           </div>
-                        </div>
-                      )}
-                    </td>
-                  </tr>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
                 ))}
                 {(!contacts || contacts.length === 0) && (
                   <tr>
