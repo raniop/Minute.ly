@@ -1,7 +1,9 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { getContacts, getContactStats, scrapeConnections, getJobStatus, getContactsCacheStatus, getActiveScrape } from '../api/client'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { getContacts, getContactStats, scrapeConnections, getJobStatus, getContactsCacheStatus, getActiveScrape, sendTodayMessages } from '../api/client'
 import { useState, useEffect, useCallback, useRef } from 'react'
 import LinkedInStatus from '../components/LinkedInStatus'
+import { build_initial_message } from '../utils/messageTemplates'
+import type { SendItem } from '../types'
 
 export default function ContactList() {
   const [industry, setIndustry] = useState('')
@@ -15,18 +17,25 @@ export default function ContactList() {
   const queryClient = useQueryClient()
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(null)
 
+  // Quick-send state
+  const [sendingContactId, setSendingContactId] = useState<number | null>(null)
+  const [sendMessage, setSendMessage] = useState('')
+  const [sendAttachVideo, setSendAttachVideo] = useState(true)
+  const [sendJobId, setSendJobId] = useState<string | null>(null)
+  const [sendProgress, setSendProgress] = useState({ progress: 0, total: 0, status: '' })
+  const [sendError, setSendError] = useState<string | null>(null)
+
   const PER_PAGE = 50
 
   // Debounce search input
   useEffect(() => {
     debounceRef.current = setTimeout(() => {
       setDebouncedSearch(search)
-      setPage(1) // Reset to page 1 on new search
+      setPage(1)
     }, 300)
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
   }, [search])
 
-  // Reset page when industry changes
   useEffect(() => {
     setPage(1)
   }, [industry])
@@ -120,6 +129,72 @@ export default function ContactList() {
     return () => clearInterval(interval)
   }, [scrapeJobId, queryClient])
 
+  // Poll send job status
+  useEffect(() => {
+    if (!sendJobId) return
+    const interval = setInterval(async () => {
+      try {
+        const status = await getJobStatus(sendJobId)
+        setSendProgress({
+          progress: status.progress,
+          total: status.total,
+          status: status.status,
+        })
+        if (status.status === 'completed' || status.status === 'failed') {
+          clearInterval(interval)
+          setSendJobId(null)
+          if (status.status === 'completed') {
+            setSendingContactId(null)
+            queryClient.invalidateQueries({ queryKey: ['contacts'] })
+            queryClient.invalidateQueries({ queryKey: ['contactStats'] })
+          }
+          if (status.error) {
+            setSendError(status.error)
+          }
+        }
+      } catch { /* ignore */ }
+    }, 3000)
+    return () => clearInterval(interval)
+  }, [sendJobId, queryClient])
+
+  const sendMutation = useMutation({
+    mutationFn: (items: SendItem[]) => sendTodayMessages(items),
+    onSuccess: (data) => {
+      setSendError(null)
+      setSendJobId(data.job_id)
+      setSendProgress({ progress: 0, total: data.total, status: 'queued' })
+    },
+    onError: (error: any) => {
+      const status = error?.response?.status
+      if (status === 401) {
+        setSendError('Session expired. Please re-login to LinkedIn.')
+      } else {
+        setSendError(error?.response?.data?.detail || error?.message || 'Failed to send message')
+      }
+    },
+  })
+
+  const handleQuickSend = (contact: any) => {
+    if (sendingContactId === contact.id) {
+      setSendingContactId(null)
+      return
+    }
+    setSendingContactId(contact.id)
+    setSendMessage(build_initial_message(contact.first_name, contact.company, contact.industry))
+    setSendAttachVideo(true)
+    setSendError(null)
+  }
+
+  const handleSendMessage = () => {
+    if (!sendingContactId) return
+    sendMutation.mutate([{
+      contact_id: sendingContactId,
+      message: sendMessage,
+      attach_video: sendAttachVideo,
+    }])
+  }
+
+  const isSending = !!sendJobId || sendMutation.isPending
   const isCached = cacheStatus?.cached && cacheStatus.count > 0
   const hasMore = contacts && contacts.length === PER_PAGE
 
@@ -197,6 +272,24 @@ export default function ContactList() {
         </div>
       )}
 
+      {sendError && (
+        <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg flex items-center justify-between">
+          <span className="text-sm text-red-700">{sendError}</span>
+          <button onClick={() => setSendError(null)} className="text-red-500 hover:text-red-700 text-sm ml-4">✕</button>
+        </div>
+      )}
+
+      {isSending && (
+        <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">
+          <div className="flex items-center gap-2">
+            <div className="animate-spin w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full" />
+            <span className="text-sm text-blue-700">
+              Sending message... {sendProgress.progress}/{sendProgress.total}
+            </span>
+          </div>
+        </div>
+      )}
+
       {stats && (
         <div className="grid grid-cols-4 gap-4 mb-6">
           <div className="bg-white border rounded-lg p-4 text-center">
@@ -255,50 +348,99 @@ export default function ContactList() {
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Name</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Title</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Company</th>
-                  <th className="text-left px-4 py-3 font-medium text-gray-600">Industry</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Status</th>
                   <th className="text-left px-4 py-3 font-medium text-gray-600">Last Messaged</th>
+                  <th className="text-center px-4 py-3 font-medium text-gray-600">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {contacts?.map((contact) => (
-                  <tr key={contact.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3">
-                      <a
-                        href={contact.profile_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-blue-600 hover:underline font-medium"
+                  <tr key={contact.id}>
+                    <td colSpan={6} className="p-0">
+                      <div
+                        className={`flex items-center hover:bg-gray-50 cursor-pointer ${sendingContactId === contact.id ? 'bg-blue-50' : ''}`}
+                        onClick={() => handleQuickSend(contact)}
                       >
-                        {contact.full_name}
-                      </a>
-                    </td>
-                    <td className="px-4 py-3 text-gray-600">{contact.title}</td>
-                    <td className="px-4 py-3 text-gray-600">{contact.company}</td>
-                    <td className="px-4 py-3">
-                      <span className="px-2 py-0.5 bg-purple-100 text-purple-700 rounded-full text-xs">
-                        {contact.industry}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3">
-                      {contact.has_replied ? (
-                        <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded-full text-xs">
-                          Replied
-                        </span>
-                      ) : contact.last_messaged_at ? (
-                        <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-xs">
-                          Messaged
-                        </span>
-                      ) : (
-                        <span className="px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full text-xs">
-                          New
-                        </span>
+                        <td className="px-4 py-3 w-1/5">
+                          <a
+                            href={contact.profile_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-blue-600 hover:underline font-medium"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {contact.full_name}
+                          </a>
+                        </td>
+                        <td className="px-4 py-3 text-gray-600 w-1/4 truncate">{contact.title}</td>
+                        <td className="px-4 py-3 text-gray-600 w-1/6">{contact.company}</td>
+                        <td className="px-4 py-3 w-1/8">
+                          {contact.has_replied ? (
+                            <span className="px-2 py-0.5 bg-green-100 text-green-700 rounded-full text-xs">Replied</span>
+                          ) : contact.last_messaged_at ? (
+                            <span className="px-2 py-0.5 bg-blue-100 text-blue-700 rounded-full text-xs">Messaged</span>
+                          ) : (
+                            <span className="px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full text-xs">New</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-gray-500 text-xs w-1/8">
+                          {contact.last_messaged_at
+                            ? new Date(contact.last_messaged_at).toLocaleDateString()
+                            : '-'}
+                        </td>
+                        <td className="px-4 py-3 text-center w-1/8">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleQuickSend(contact) }}
+                            disabled={isSending}
+                            className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
+                              sendingContactId === contact.id
+                                ? 'bg-blue-600 text-white'
+                                : 'bg-gray-100 text-gray-700 hover:bg-blue-100 hover:text-blue-700'
+                            } disabled:opacity-50`}
+                          >
+                            {sendingContactId === contact.id ? 'Close' : 'Send'}
+                          </button>
+                        </td>
+                      </div>
+
+                      {/* Expandable send panel */}
+                      {sendingContactId === contact.id && (
+                        <div className="px-4 pb-4 pt-2 bg-blue-50 border-t border-blue-100">
+                          <div className="space-y-3">
+                            <div>
+                              <label className="text-xs font-medium text-gray-600 block mb-1">
+                                Message to {contact.first_name}
+                              </label>
+                              <textarea
+                                value={sendMessage}
+                                onChange={(e) => setSendMessage(e.target.value)}
+                                disabled={isSending}
+                                rows={4}
+                                className="w-full border border-gray-300 rounded-md p-2 text-sm focus:border-blue-400 focus:ring-1 focus:ring-blue-400 resize-none"
+                              />
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={sendAttachVideo}
+                                  onChange={(e) => setSendAttachVideo(e.target.checked)}
+                                  disabled={isSending}
+                                  className="rounded border-gray-300 text-blue-600"
+                                />
+                                Attach demo video
+                              </label>
+                              <button
+                                onClick={handleSendMessage}
+                                disabled={isSending || !sendMessage.trim() || !browserConnected}
+                                className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                              >
+                                {isSending ? 'Sending...' : 'Send Message'}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
                       )}
-                    </td>
-                    <td className="px-4 py-3 text-gray-500 text-xs">
-                      {contact.last_messaged_at
-                        ? new Date(contact.last_messaged_at).toLocaleDateString()
-                        : '-'}
                     </td>
                   </tr>
                 ))}
