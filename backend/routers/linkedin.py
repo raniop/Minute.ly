@@ -137,6 +137,18 @@ def get_contacts_status(db: Session = Depends(get_db), user_id: str | None = Dep
     return {"cached": count > 0, "count": count, "user_id": user_id}
 
 
+@router.get("/debug/owners")
+def debug_owners(db: Session = Depends(get_db)):
+    """Diagnostic: show contact counts grouped by owner_linkedin_id."""
+    from sqlalchemy import func
+    rows = (
+        db.query(Contact.owner_linkedin_id, func.count(Contact.id))
+        .group_by(Contact.owner_linkedin_id)
+        .all()
+    )
+    return {owner or "(none)": count for owner, count in rows}
+
+
 @router.post("/take-screenshot")
 async def take_screenshot(user_id: str = Depends(get_user_id)):
     """Take a screenshot of the current browser page."""
