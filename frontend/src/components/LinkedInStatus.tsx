@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { getWorkerStatus, loginLinkedIn, verifyLinkedIn, checkLogin, logoutLinkedIn } from '../api/client'
+import { getWorkerStatus, loginLinkedIn, verifyLinkedIn, checkLogin, logoutLinkedIn, reconnectLinkedIn } from '../api/client'
 
 interface Props {
   onStatusChange?: (connected: boolean) => void
@@ -17,6 +17,7 @@ export default function LinkedInStatus({ onStatusChange }: Props) {
   const [verifyCode, setVerifyCode] = useState('')
   const [showPinInput, setShowPinInput] = useState(false)
   const verifyPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const reconnectAttempted = useRef(false)
 
   // Poll worker status (general)
   useEffect(() => {
@@ -30,6 +31,29 @@ export default function LinkedInStatus({ onStatusChange }: Props) {
         }
         if (ws.current_user_id) setUserId(ws.current_user_id)
         onStatusChange?.(isConnected)
+
+        // Auto-reconnect: user has valid session cookie but no browser
+        // (happens after server restart/deploy)
+        if (!isConnected && ws.has_session && !reconnectAttempted.current && status === 'disconnected') {
+          reconnectAttempted.current = true
+          setStatus('connecting')
+          setMessage('Reconnecting from saved session...')
+          try {
+            const result = await reconnectLinkedIn()
+            if (result.reconnected) {
+              setStatus('connected')
+              setMessage('')
+              if (ws.current_user_id) setUserId(ws.current_user_id)
+              onStatusChange?.(true)
+            } else {
+              setStatus('disconnected')
+              setMessage('Session expired. Please login again.')
+            }
+          } catch {
+            setStatus('disconnected')
+            setMessage('')
+          }
+        }
       } catch {
         // ignore
       }
@@ -146,6 +170,7 @@ export default function LinkedInStatus({ onStatusChange }: Props) {
       await logoutLinkedIn()
       // Clear ALL cached data so next user doesn't see previous user's data
       queryClient.clear()
+      reconnectAttempted.current = false
       setStatus('disconnected')
       setEmail('')
       setPassword('')

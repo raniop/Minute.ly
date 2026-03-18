@@ -80,3 +80,6 @@ export const getJobStatus = (jobId: string) =>
 
 export const getActiveScrape = () =>
   api.get<ActiveScrape>('/linkedin/active-scrape').then(r => r.data)
+
+export const reconnectLinkedIn = () =>
+  api.post<{ reconnected: boolean; browser_connected?: boolean; reason?: string }>('/linkedin/reconnect').then(r => r.data)

@@ -80,6 +80,39 @@ class WorkerPool:
             "active_job": None,
         }
 
+    async def reconnect_from_cookies(self, user_id: str) -> dict:
+        """Try to restore a browser session from saved cookies.
+
+        Called automatically when a user has a valid auth cookie but no
+        active browser session (e.g. after server restart/deploy).
+        """
+        # Already has an active session?
+        existing = self._sessions.get(user_id)
+        if existing and existing.is_browser_ready:
+            return {"reconnected": True, "browser_connected": True}
+
+        # Check if cookies exist on disk
+        cookies_file = settings.cookies_file_for(user_id)
+        if not cookies_file.exists():
+            return {"reconnected": False, "reason": "no_cookies"}
+
+        # Acquire a session slot and try cookie-based login
+        async with self._lock:
+            session = await self._ensure_session(user_id)
+
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(session._executor, session.do_launch_and_login)
+
+        if session.is_browser_ready:
+            logger.info(f"Auto-reconnected user {user_id} from cookies.")
+            return {"reconnected": True, "browser_connected": True}
+        else:
+            # Cookie login failed - clean up the session
+            async with self._lock:
+                self._sessions.pop(user_id, None)
+            session.close()
+            return {"reconnected": False, "reason": "cookies_expired"}
+
     # --- Login flow ---
 
     async def login_user(self, user_id: str, email: str, password: str) -> dict:

@@ -46,8 +46,17 @@ def get_worker_status(user_id: str | None = Depends(get_optional_user_id)):
             "browser_connected": False,
             "current_user_id": None,
             "active_job": None,
+            "has_session": False,
         }
-    return worker_pool.get_session_status(user_id)
+    status = worker_pool.get_session_status(user_id)
+    status["has_session"] = True  # user has a valid auth cookie
+    return status
+
+
+@router.post("/reconnect")
+async def reconnect(user_id: str = Depends(get_user_id)):
+    """Auto-reconnect browser from saved cookies after server restart."""
+    return await worker_pool.reconnect_from_cookies(user_id)
 
 
 @router.get("/logs")

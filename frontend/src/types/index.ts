@@ -74,6 +74,7 @@ export interface WorkerStatus {
   browser_connected: boolean
   current_user_id: string | null
   active_job: string | null
+  has_session?: boolean
 }
 
 export interface ContactsCacheStatus {
