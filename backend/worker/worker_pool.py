@@ -135,6 +135,11 @@ class WorkerPool:
                     self._sessions.pop(user_id, None)
                     session.user_id = actual_id
                     self._sessions[actual_id] = session
+                # Re-save cookies under the real ID so reconnect works
+                await loop.run_in_executor(
+                    session._executor,
+                    lambda: self._copy_cookies(user_id, actual_id)
+                )
                 result["user_id"] = actual_id
             else:
                 result["user_id"] = user_id
@@ -142,6 +147,15 @@ class WorkerPool:
             result["user_id"] = user_id
 
         return result
+
+    def _copy_cookies(self, old_id: str, new_id: str):
+        """Copy cookies file from temp ID to real ID for reconnect."""
+        old_file = settings.cookies_file_for(old_id)
+        new_file = settings.cookies_file_for(new_id)
+        if old_file.exists():
+            import shutil
+            shutil.copy2(old_file, new_file)
+            logger.info(f"Cookies copied: {old_id} -> {new_id}")
 
     async def verify_user(self, user_id: str, code: str) -> dict:
         """Submit verification code for a user."""
@@ -162,6 +176,11 @@ class WorkerPool:
                     self._sessions.pop(user_id, None)
                     session.user_id = actual_id
                     self._sessions[actual_id] = session
+                # Re-save cookies under the real ID
+                await loop.run_in_executor(
+                    session._executor,
+                    lambda: self._copy_cookies(user_id, actual_id)
+                )
                 result["user_id"] = actual_id
             else:
                 result["user_id"] = user_id

@@ -6,16 +6,9 @@ from typing import Optional
 from backend.database import get_db
 from backend.models.contact import Contact
 from backend.schemas.contact import ContactOut, ContactUpdate, ContactStats
-from backend.auth import get_optional_user_id
+from backend.auth import get_optional_user_id, get_user_id
 
 router = APIRouter()
-
-
-def _owner_filter(query, user_id: Optional[str]):
-    """Filter contacts by user's LinkedIn ID."""
-    if user_id:
-        query = query.filter(Contact.owner_linkedin_id == user_id)
-    return query
 
 
 @router.get("", response_model=list[ContactOut])
@@ -29,8 +22,9 @@ def list_contacts(
     db: Session = Depends(get_db),
     user_id: str | None = Depends(get_optional_user_id),
 ):
-    query = db.query(Contact)
-    query = _owner_filter(query, user_id)
+    if not user_id:
+        return []
+    query = db.query(Contact).filter(Contact.owner_linkedin_id == user_id)
     if industry:
         query = query.filter(Contact.industry == industry)
     if tag:
@@ -60,8 +54,9 @@ def list_contacts(
 
 @router.get("/stats", response_model=ContactStats)
 def get_stats(db: Session = Depends(get_db), user_id: str | None = Depends(get_optional_user_id)):
-    base = db.query(Contact)
-    base = _owner_filter(base, user_id)
+    if not user_id:
+        return ContactStats(total=0, connected=0, by_industry={}, messaged=0, replied=0)
+    base = db.query(Contact).filter(Contact.owner_linkedin_id == user_id)
 
     total = base.count()
     connected = base.filter(Contact.is_connected == True).count()  # noqa: E712
@@ -84,10 +79,8 @@ def get_stats(db: Session = Depends(get_db), user_id: str | None = Depends(get_o
 
 
 @router.get("/{contact_id}", response_model=ContactOut)
-def get_contact(contact_id: int, db: Session = Depends(get_db), user_id: Optional[str] = Depends(get_optional_user_id)):
-    query = db.query(Contact).filter(Contact.id == contact_id)
-    if user_id:
-        query = query.filter(Contact.owner_linkedin_id == user_id)
+def get_contact(contact_id: int, db: Session = Depends(get_db), user_id: str = Depends(get_user_id)):
+    query = db.query(Contact).filter(Contact.id == contact_id, Contact.owner_linkedin_id == user_id)
     contact = query.first()
     if not contact:
         from fastapi import HTTPException
